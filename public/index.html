@@ -3964,12 +3964,13 @@ ${code}
 
       function ChatImageCard({ imgItem, onRegenerateImage }) {
         const [ratio, setRatio] = useState(imgItem.aspectRatio || '1:1');
+        const [imodel, setImodel] = useState(() => { try { return localStorage.getItem('aib_image_model') || 'gemini'; } catch { return 'gemini'; } });
         const [busy, setBusy] = useState(false);
 
         const handleRegen = async () => {
           setBusy(true);
           try {
-            await onRegenerateImage(imgItem.prompt, ratio);
+            await onRegenerateImage(imgItem.prompt, ratio, imodel);
           } finally {
             setBusy(false);
           }
@@ -4019,6 +4020,19 @@ ${code}
                   <option value="4:3">4:3</option>
                   <option value="3:4">3:4</option>
                 </select>
+                <select
+                  value={imodel}
+                  onChange={(e) => { setImodel(e.target.value); try { localStorage.setItem('aib_image_model', e.target.value); } catch {} }}
+                  style={{ height: 32, borderRadius: 999, border: '1px solid #2e2e33', background: '#1c1c1f', color: '#f4f4f5', padding: '0 10px', fontSize: 12 }}
+                >
+                  <option value="gemini">Gemini image</option>
+                  <option value="flux">Flux Klein (NVIDIA)</option>
+                  <option value="nvidia">NVIDIA auto (sab free models)</option>
+                  <option value="nv:flux.1-schnell">FLUX.1 schnell</option>
+                  <option value="nv:flux.1-dev">FLUX.1 dev</option>
+                  <option value="nv:stable-diffusion-3-medium">Stable Diffusion 3 medium</option>
+                  <option value="nv:flux.2-klein-4b">FLUX.2 klein 4B</option>
+                </select>
                 <span
                   style={{
                     fontSize: 11.5,
@@ -4030,8 +4044,11 @@ ${code}
                     fontFamily: 'ui-monospace, monospace',
                   }}
                 >
-                  ✦ {imgItem.model || 'nvidia/flux.2-klein-4b'}
+                  ✦ {imgItem.model || 'image'}
                 </span>
+                {imgItem.note && (
+                  <span style={{ fontSize: 11, color: '#fbbf24' }}>{imgItem.note}</span>
+                )}
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -4626,6 +4643,8 @@ ${code}
         const [input, setInput] = useState('');
         const [chatAttachments, setChatAttachments] = useState([]);
         const [aspectRatio, setAspectRatio] = useState('1:1');
+        const [imageModel, setImageModelState] = useState(() => { try { return localStorage.getItem('aib_image_model') || 'gemini'; } catch { return 'gemini'; } });
+        const setImageModel = (v) => { setImageModelState(v); try { localStorage.setItem('aib_image_model', v); } catch {} };
         const [forceImageMode, setForceImageMode] = useState(false);
         const [streaming, setStreaming] = useState(false);
 
@@ -4787,6 +4806,7 @@ ${code}
                 messages: apiMessages,
                 attachments: atts,
                 aspectRatio,
+                imageModel,
                 forceImage: forceImageMode,
               }),
               signal: controller.signal,
@@ -4876,11 +4896,11 @@ ${code}
           sendMessageToGemini(targetUserMsg.text, targetUserMsg.attachments || [], historyBefore);
         };
 
-        const handleRegenerateImageOnMsg = async (msgId, prompt, newRatio) => {
+        const handleRegenerateImageOnMsg = async (msgId, prompt, newRatio, imodel) => {
           const resp = await fetch('/api/chat/image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, aspectRatio: newRatio }),
+            body: JSON.stringify({ prompt, aspectRatio: newRatio, imageModel: imodel }),
           });
           const data = await resp.json();
           if (!resp.ok || !data.url) {
@@ -4902,6 +4922,7 @@ ${code}
                             prompt,
                             aspectRatio: data.aspectRatio || newRatio,
                             model: data.model,
+                            note: data.note,
                           },
                         ],
                       }
@@ -5132,7 +5153,7 @@ ${code}
                             key={m.id}
                             msg={m}
                             onRegenerate={() => handleRegenerateTurn(idx)}
-                            onRegenerateImage={(p, r) => handleRegenerateImageOnMsg(m.id, p, r)}
+                            onRegenerateImage={(p, r, im) => handleRegenerateImageOnMsg(m.id, p, r, im)}
                             onSelectOption={(optText) => sendMessageToGemini(optText, [])}
                           />
                         )
@@ -5206,6 +5227,18 @@ ${code}
                               }}
                             >
                               {r}
+                            </button>
+                          ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: 4, padding: '0 6px 6px' }}>
+                          {[['gemini', 'Gemini'], ['flux', 'Flux Klein'], ['nvidia', 'NVIDIA auto']].map(([k, l]) => (
+                            <button
+                              key={k}
+                              type="button"
+                              onClick={() => { setImageModel(k); setPlusMenuOpen(false); }}
+                              style={{ flex: 1, padding: '5px 0', borderRadius: 8, border: '1px solid #2e2e33', background: imageModel === k ? '#a855f7' : '#141417', color: '#fff', fontSize: 11.5, cursor: 'pointer' }}
+                            >
+                              {l}
                             </button>
                           ))}
                         </div>

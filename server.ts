@@ -1918,13 +1918,13 @@ function isDirectImageGenerationRequest(userText: string, hasAttachments: boolea
 function getDimensionsForAspectRatio(aspectRatio: string): { width: number; height: number } {
   switch (aspectRatio) {
     case '16:9':
-      return { width: 1280, height: 720 };
+      return { width: 1344, height: 768 };
     case '9:16':
-      return { width: 720, height: 1280 };
+      return { width: 768, height: 1344 };
     case '4:3':
-      return { width: 1024, height: 768 };
+      return { width: 1152, height: 896 };
     case '3:4':
-      return { width: 768, height: 1024 };
+      return { width: 896, height: 1152 };
     default:
       return { width: 1024, height: 1024 };
   }
@@ -2362,15 +2362,15 @@ async function fetchWikimediaRasterImage(
   return null;
 }
 
-const NVIDIA_FREE_IMAGE_MODELS = [
-  {
-    model: 'nvidia/flux.2-klein-4b',
-    fnId: 'f67e96d8-1c4e-422e-a913-90f00e19aa9a',
-  },
-  {
-    model: 'nvidia/flux-3-image-klein',
-    fnId: 'c157541a-5779-400c-a785-6638465d8ebc',
-  },
+type NvImg = { id: string; model: string; fnId: string; extra?: Record<string, any>; ar?: boolean };
+const NIM = 'https://ai.api.nvidia.com/v1/genai/';
+const NVIDIA_FREE_IMAGE_MODELS: NvImg[] = [
+  { id: 'flux-3-image-klein', model: 'nvidia/flux-3-image-klein', fnId: 'c157541a-5779-400c-a785-6638465d8ebc' },
+  { id: 'flux.2-klein-4b', model: 'nvidia/flux.2-klein-4b', fnId: NIM + 'black-forest-labs/flux.2-klein-4b' },
+  { id: 'flux.2-klein-4b (nvcf)', model: 'nvidia/flux.2-klein-4b', fnId: 'f67e96d8-1c4e-422e-a913-90f00e19aa9a' },
+  { id: 'flux.1-schnell', model: 'black-forest-labs/flux.1-schnell', fnId: NIM + 'black-forest-labs/flux.1-schnell', extra: { steps: 4 } },
+  { id: 'flux.1-dev', model: 'black-forest-labs/flux.1-dev', fnId: NIM + 'black-forest-labs/flux.1-dev', extra: { mode: 'base', steps: 30, cfg_scale: 3.5 } },
+  { id: 'stable-diffusion-3-medium', model: 'stabilityai/stable-diffusion-3-medium', fnId: NIM + 'stabilityai/stable-diffusion-3-medium', ar: true, extra: { steps: 28, cfg_scale: 5 } },
 ];
 
 function invokeNvidiaNvcfFunctionIPv4(
@@ -2382,7 +2382,7 @@ function invokeNvidiaNvcfFunctionIPv4(
   return new Promise((resolve, reject) => {
     const bodyStr = JSON.stringify(payload);
     const req = https.request(
-      `https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/${fnId}`,
+      fnId.startsWith('http') ? fnId : `https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/${fnId}`,
       {
         method: 'POST',
         family: 4,
@@ -2473,34 +2473,34 @@ function pollNvidiaNvcfStatusIPv4(
 
 async function generateNvidiaFreeImage(
   rawPrompt: string,
-  aspectRatio = '1:1'
+  aspectRatio = '1:1',
+  ids?: string[],
+  tried: Set<string> = new Set()
 ): Promise<{ url: string; model: string; aspectRatio: string } | null> {
   const nvidiaKey = getNvidiaApiKey();
-  if (!nvidiaKey) return null;
+  if (!nvidiaKey) throw new Error('NVIDIA_API_KEY set nahi hai');
 
   const { cleanPrompt } = extractSubjectSearchQueries(rawPrompt);
   const wordCount = cleanPrompt.split(/\s+/).filter(Boolean).length;
-  const enhancedPrompt =
-    wordCount <= 6
-      ? `${cleanPrompt}, photorealistic, high resolution, rich details, natural lighting, sharp focus`
-      : cleanPrompt;
+  const enhancedPrompt = /8k|ultra[- ]detailed|high[- ]resolution|masterpiece/i.test(cleanPrompt)
+    ? cleanPrompt
+    : `${cleanPrompt}, ultra detailed, high resolution, sharp focus, professional composition, rich textures, cinematic lighting`;
 
   const { width, height } = getDimensionsForAspectRatio(aspectRatio);
   const seed = Math.floor(Math.random() * 900000) + 10000;
 
-  for (const item of NVIDIA_FREE_IMAGE_MODELS) {
+  const t0 = Date.now();
+  const list = NVIDIA_FREE_IMAGE_MODELS.filter((m) => (!ids || ids.includes(m.id)) && !tried.has(m.fnId));
+  if (!ids) list.sort((x, y) => (y.fnId.startsWith('http') ? 1 : 0) - (x.fnId.startsWith('http') ? 1 : 0));
+  const arMap: Record<string, string> = { '4:3': '5:4', '3:4': '4:5' };
+  for (const item of list) {
+    if (Date.now() - t0 > 90000) break;
+    tried.add(item.fnId);
     try {
-      const res = await invokeNvidiaNvcfFunctionIPv4(
-        item.fnId,
-        nvidiaKey,
-        {
-          prompt: enhancedPrompt,
-          width,
-          height,
-          seed,
-        },
-        18000
-      );
+      const body = item.ar
+        ? { prompt: enhancedPrompt, aspect_ratio: arMap[aspectRatio] || aspectRatio, seed, ...item.extra }
+        : { prompt: enhancedPrompt, width, height, seed, ...item.extra };
+      const res = await invokeNvidiaNvcfFunctionIPv4(item.fnId, nvidiaKey, body, 25000);
 
       let finalData = res.data;
       if (res.status === 202 && res.reqId) {
@@ -2528,17 +2528,69 @@ async function generateNvidiaFreeImage(
   return null;
 }
 
+let geminiImgCooldownUntil = 0;
+async function generateGeminiNativeImage(
+  prompt: string,
+  aspectRatio: string
+): Promise<{ url: string; model: string; aspectRatio: string }> {
+  const ai = getGenAIClient();
+  if (Date.now() < geminiImgCooldownUntil) throw new Error('Gemini image quota/limit chal raha hai, kuch der baad dobara try hoga');
+  const candidates = [process.env.GEMINI_IMAGE_MODEL, 'gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-3.1-flash-lite-image'].filter(Boolean) as string[];
+  const size = process.env.GEMINI_IMAGE_SIZE || '2K';
+  let lastErr = '';
+  for (const model of candidates) {
+    for (const withSize of [true, false]) {
+      try {
+        const r: any = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: { responseModalities: ['IMAGE'], imageConfig: withSize ? { aspectRatio, imageSize: size } : { aspectRatio } } as any,
+        });
+        for (const part of r?.candidates?.[0]?.content?.parts || []) {
+          const d = part?.inlineData;
+          if (d?.data) return { url: `data:${d.mimeType || 'image/png'};base64,${d.data}`, model, aspectRatio };
+        }
+        lastErr = `${model}: response me image nahi thi`;
+      } catch (e: any) {
+        lastErr = `${model}: ${String(e?.message || e).slice(0, 160)}`;
+        if (/429|quota|RESOURCE_EXHAUSTED|rate.?limit|exhausted/i.test(String(e?.message || e))) {
+          geminiImgCooldownUntil = Date.now() + 90000;
+          throw new Error(`Gemini image quota/limit: ${lastErr}`);
+        }
+      }
+    }
+  }
+  throw new Error(lastErr || 'Gemini image generation failed');
+}
+
 async function generateGeminiImage(
   prompt: string,
   aspectRatio = '1:1',
-  _attachments?: AttachmentInput[]
-): Promise<{ url: string; model: string; aspectRatio: string; caption?: string }> {
+  _attachments?: AttachmentInput[],
+  imageModel = 'gemini'
+): Promise<{ url: string; model: string; aspectRatio: string; caption?: string; note?: string }> {
   const validRatio = detectAspectRatioFromPrompt(prompt, aspectRatio);
 
   // 1. Automatically switch to NVIDIA NIM free Flux image generation models (flux.2-klein-4b / flux-3-image-klein)
-  const nvidiaImg = await generateNvidiaFreeImage(prompt, validRatio);
-  if (nvidiaImg) {
-    return nvidiaImg;
+  const tried = new Set<string>();
+  const KLEIN = ['flux-3-image-klein', 'flux.2-klein-4b', 'flux.2-klein-4b (nvcf)'];
+  const sel = String(imageModel || 'gemini');
+  const stages: { label: string; run: () => Promise<any> }[] = [];
+  const nv = (label: string, ids?: string[]) => stages.push({ label, run: () => generateNvidiaFreeImage(prompt, validRatio, ids, tried) });
+  const gem = () => stages.push({ label: 'Gemini', run: () => generateGeminiNativeImage(prompt, validRatio) });
+  if (sel === 'flux') { nv('Flux Klein', KLEIN); nv('NVIDIA auto'); gem(); }
+  else if (sel === 'nvidia') { nv('NVIDIA auto'); gem(); }
+  else if (sel.startsWith('nv:')) { nv(sel.slice(3), [sel.slice(3)]); nv('NVIDIA auto'); gem(); }
+  else { gem(); nv('NVIDIA auto'); }
+  const fails: string[] = [];
+  for (const st of stages) {
+    try {
+      const r = await st.run();
+      if (r) return fails.length ? { ...r, note: `${fails.join(' | ')} -> ${r.model} se bana` } : r;
+      fails.push(`${st.label}: image nahi mili`);
+    } catch (e: any) {
+      fails.push(`${st.label}: ${String(e?.message || e).slice(0, 160)}`);
+    }
   }
 
   // 2. Fallback: Real subject photograph lookup (Wikipedia & Wikimedia Commons)
@@ -2546,7 +2598,7 @@ async function generateGeminiImage(
   if (wikiImg) {
     return {
       url: `data:${wikiImg.mimeType};base64,${wikiImg.buffer.toString('base64')}`,
-      model: 'nvidia/flux.2-klein-4b',
+      model: 'wikimedia photo (fallback)',
       aspectRatio: validRatio,
     };
   }
@@ -2563,7 +2615,7 @@ async function generateGeminiImage(
       const { buffer, mimeType } = await fetchRasterImageIPv4(fluxEndpoint, 8000);
       return {
         url: `data:${mimeType};base64,${buffer.toString('base64')}`,
-        model: 'nvidia/flux.2-klein-4b',
+        model: 'pollinations flux (fallback)',
         aspectRatio: validRatio,
       };
     } catch (err: any) {
@@ -2579,7 +2631,7 @@ async function generateGeminiImage(
   if (fallbackPhoto) {
     return {
       url: `data:${fallbackPhoto.mimeType};base64,${fallbackPhoto.buffer.toString('base64')}`,
-      model: 'nvidia/flux.2-klein-4b',
+      model: 'wikimedia photo (fallback)',
       aspectRatio: validRatio,
     };
   }
@@ -2587,14 +2639,14 @@ async function generateGeminiImage(
   const pngBuffer = generateValidPngBuffer(width, height);
   return {
     url: `data:image/png;base64,${pngBuffer.toString('base64')}`,
-    model: 'nvidia/flux.2-klein-4b',
+    model: 'placeholder (image generation fail hui)',
     aspectRatio: validRatio,
   };
 }
 
 app.post('/api/chat/image', async (req, res) => {
   try {
-    const { prompt, aspectRatio, attachments } = req.body || {};
+    const { prompt, aspectRatio, attachments, imageModel } = req.body || {};
     if (!prompt || !String(prompt).trim()) {
       res.status(400).json({ error: 'Image prompt is required.' });
       return;
@@ -2602,7 +2654,8 @@ app.post('/api/chat/image', async (req, res) => {
     const result = await generateGeminiImage(
       String(prompt).trim(),
       String(aspectRatio || '1:1'),
-      Array.isArray(attachments) ? attachments : undefined
+      Array.isArray(attachments) ? attachments : undefined,
+      String(imageModel || 'gemini')
     );
     res.json(result);
   } catch (err: any) {
@@ -2648,7 +2701,7 @@ app.post('/api/chat/stream', async (req, res) => {
   }, 5000);
 
   try {
-    const { model, messages, attachments, aspectRatio, forceImage } = req.body || {};
+    const { model, messages, attachments, aspectRatio, forceImage, imageModel } = req.body || {};
     const apiKey = getGeminiApiKey();
     if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'MISSING_KEY') {
       throw new Error(
@@ -2698,21 +2751,22 @@ app.post('/api/chat/stream', async (req, res) => {
       const ratio = detectAspectRatioFromPrompt(promptToGenerate, aspectRatio || '1:1');
       sendEvent({
         type: 'thought',
-        text: `**Switching to NVIDIA NIM Image Generator**\n\nAutomatically switching from Gemini to NVIDIA NIM (` + '`nvidia/flux.2-klein-4b`' + `) to generate "${promptToGenerate}" (${ratio})...\n`,
-        heading: 'Generating Image with NVIDIA Flux',
+        text: `**Generating image**\n\nUsing ${String(imageModel || 'gemini') === 'gemini' ? 'Gemini image model' : 'NVIDIA free image models'} for "${promptToGenerate}".`,
+        heading: 'Generating Image',
       });
       sendEvent({
         type: 'image_start',
         prompt: promptToGenerate,
         aspectRatio: ratio,
       });
-      const generated = await generateGeminiImage(promptToGenerate, ratio, lastAtts);
+      const generated = await generateGeminiImage(promptToGenerate, ratio, lastAtts, String(imageModel || 'gemini'));
       sendEvent({
         type: 'image',
         url: generated.url,
         prompt: promptToGenerate,
         aspectRatio: generated.aspectRatio,
         model: generated.model,
+        note: (generated as any).note,
       });
       sendEvent({ type: 'done' });
       return;
@@ -2870,7 +2924,8 @@ app.post('/api/chat/stream', async (req, res) => {
         const generated = await generateGeminiImage(
           reqItem.prompt,
           reqItem.aspectRatio,
-          lastAtts
+          lastAtts,
+          String(imageModel || 'gemini')
         );
         sendEvent({
           type: 'image',
@@ -2878,6 +2933,7 @@ app.post('/api/chat/stream', async (req, res) => {
           prompt: reqItem.prompt,
           aspectRatio: generated.aspectRatio,
           model: generated.model,
+        note: (generated as any).note,
         });
       } catch (imgErr: any) {
         sendEvent({
