@@ -1,11 +1,26 @@
-<div align="center">
+# AI App Builder
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+A web application where you describe an app and an AI model (Google Gemini or NVIDIA NIM) writes a complete React 18 project file by file with:
 
-  <h1>Built with AI Studio</h2>
+- **Live Thinking**: Real-time thought stream with live updating bold headings.
+- **Live Code**: Watch files get created, updated, and syntax-checked with `esbuild` in real time.
+- **Interactive Preview**: Sandboxed browser preview with safe link/form handling and error capture.
+- **Built-in Terminal & Console**: Captures `console.log/info/warn/error`, runtime errors, and server terminal commands.
+- **One-Click ZIP Export**: Downloads all project files along with a standalone runnable `index.html`.
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## Stack
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+- **Backend**: Node.js, TypeScript (`tsx`), Express, `esbuild`, `@google/genai`
+- **Frontend**: Single-file `public/index.html` using React 18.3.1, ReactDOM 18.3.1, Babel Standalone 7.24.7, and JSZip 3.10.1 from cdnjs.
 
-</div>
+## Quick Start
+
+1. Copy `.env.example` to `.env` and set `GEMINI_API_KEY` (and optionally `NVIDIA_API_KEY`).
+2. Install dependencies and start the server:
+
+```bash
+npm install
+npm run dev
+```
+
+3. Open `http://localhost:3000`.

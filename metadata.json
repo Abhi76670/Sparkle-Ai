@@ -1,0 +1,6 @@
+{
+  "name": "AI App Builder",
+  "description": "Describe an app and let AI build a complete React project file by file with live thinking, live code, preview, terminal, and zip export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
