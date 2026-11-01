@@ -1,0 +1,2 @@
+# Image Generation
+Write an art-director brief with at least 10 named components and positions, composition (shot, angle, lens, depth of field, focal point), light and mood, a palette of 3-5 colours, style and quality words, layout regions for posters and UI, minimal exact text, and end with: no watermark, no blur, no extra limbs, no garbled text. For a set of images keep one shared style sentence.

@@ -1,0 +1,2 @@
+# YouTube Thumbnail
+Ratio 16:9 (1280x720 look). Keep a clear hierarchy of 6-8 components: one expressive face or hero subject on one third, bold high-contrast background, one or two supporting props, glow or rim light, and a title of at most 4 words in huge bold letters with a thick outline. Quote the exact title text. Saturated readable colours. Leave bottom-right clear for timestamp. No small text, clutter, or watermark.

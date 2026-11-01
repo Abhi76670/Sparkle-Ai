@@ -21,13 +21,8 @@ try {
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Direct NVIDIA API key configured in server.ts without requiring .env
-const DIRECT_NVIDIA_API_KEY =
-  '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';
-
-function getNvidiaApiKey(): string {
-  return DIRECT_NVIDIA_API_KEY;
-}
+// Provider credentials stay server-side. Configure NVIDIA_API_KEY in the deployment environment.
+function getNvidiaApiKey(): string { return process.env.NVIDIA_API_KEY || ''; }
 
 function decideSmartProjectName(rawPrompt: string): string {
   const cleaned = String(rawPrompt || '')
@@ -125,6 +120,34 @@ function getGenAIClient(): GoogleGenAI {
   });
 }
 
+const PLANNER_MODEL = process.env.GEMINI_PLANNER_MODEL || 'gemini-3.5-flash';
+function localPlan(prompt: string, mode: 'chat' | 'build') {
+  const p = String(prompt || '');
+  const image = /\b(image|thumbnail|poster|logo|wallpaper|illustration|draw|picture)\b/i.test(p);
+  const edit = image && /\b(edit|change|remove|replace|retouch)\b/i.test(p);
+  const codeChange = /\b(fix|debug|update|change|modify|add|remove|upgrade)\b/i.test(p);
+  const type = image ? (edit ? 'edit_image' : 'image') : mode === 'build' ? (codeChange ? 'code_change' : 'code_new') : codeChange ? 'code_fix' : 'task_or_question';
+  return { type, goal: p.slice(0, 240), steps: ['Understand the request and existing context', 'Choose the smallest reliable implementation', 'Verify the result and report limitations'], qualityChecklist: ['Preserve existing features and design', 'Handle errors and missing inputs', 'Verify before claiming success'], executor: image ? 'image_model' : 'selected_model', instructions: `Carry out this request faithfully: ${p}. Preserve existing functionality and verify your result.`, filesToTouch: [], risks: [], image: image ? { aspectRatio: /9:16|portrait|reel|story/i.test(p) ? '9:16' : /1:1|logo|avatar|icon/i.test(p) ? '1:1' : '16:9', category: /thumbnail|poster/i.test(p) ? 'poster_or_text' : 'illustration', needsText: /thumbnail|poster|text|logo/i.test(p), howToGenerate: 'मुख्य विषय, composition और style स्पष्ट रखें।', components: [], style: 'high quality, detailed', lighting: 'cinematic', palette: ['navy', 'cyan', 'white'], camera: 'clear focal point', prompt: p, modelOrder: [] } : null };
+}
+async function createGeminiPlan(prompt: string, mode: 'chat' | 'build') {
+  const fallback = localPlan(prompt, mode);
+  if (!prompt.trim() || /^(hi|hello|hey|thanks|thank you|ok|okay)\W*$/i.test(prompt.trim()) || prompt.trim().split(/\s+/).length < 2) return null;
+  if (!getGeminiApiKey()) return fallback;
+  const timer = new AbortController();
+  const timeout = setTimeout(() => timer.abort(), 10000);
+  try {
+    const ai = getGenAIClient();
+    const result: any = await Promise.race([
+      ai.models.generateContent({ model: PLANNER_MODEL, contents: `Return ONLY JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any }),
+      new Promise((_, reject) => timer.signal.addEventListener('abort', () => reject(new Error('Planner timeout')), { once: true }))
+    ]);
+    const raw = result?.text || result?.candidates?.[0]?.content?.parts?.map((x: any) => x.text || '').join('') || '';
+    const parsed = JSON.parse(String(raw).replace(/^```(?:json)?|```$/g, '').trim());
+    if (!['image','edit_image','code_new','code_change','code_fix','task_or_question'].includes(parsed.type)) return fallback;
+    return { ...fallback, ...parsed, steps: Array.isArray(parsed.steps) ? parsed.steps : fallback.steps, qualityChecklist: Array.isArray(parsed.qualityChecklist) ? parsed.qualityChecklist : fallback.qualityChecklist };
+  } catch { return fallback; } finally { clearTimeout(timeout); }
+}
+
 function maskKey(key?: string): string {
   if (!key || key === 'MY_GEMINI_API_KEY' || key === 'MY_NVIDIA_API_KEY' || key === 'MISSING_KEY') {
     return '(not set)';
@@ -151,6 +174,8 @@ const SKILL_NAMES = [
   'edit-responsibility',
   'framework-analysis',
   'error-free',
+  'gemini-planner', 'image-generation', 'youtube-thumbnail', 'image-editing',
+  'face-preservation', 'image-router', 'code-quality', 'auto-fix', 'task-answering',
 ];
 
 const BASE_SYSTEM_PROMPT = `You are an AI app builder inside a dashboard, with your own terminal. Projects are simple React 18 apps with NO build step and NO imports/exports. Files are plain scripts run in the browser with Babel; React and ReactDOM are globals. Always have src/App.jsx defining function App(). Extra components go in other src/*.jsx files (loaded alphabetically, App.jsx last). Styles go in src/styles.css. Output format (never in markdown code fences): write or edit a file with the full content using <file path="src/App.jsx">full content</file>; delete with <delete path="src/Old.jsx"/>; run a terminal command with <run>shell command</run>; after <run> tags stop and wait for results. Everything outside tags is your reply. You are given the current project files: only write files that need to change. If the user only asks a question, answer in plain text and do not write files. Before building, think about audience, sections, believable content (never lorem ipsum) and a distinctive style. A build is complete only when src/App.jsx and src/styles.css exist; for a very vague request build a good first version and ask 1-2 questions at the end. Always finish with a short reply in the user's language; never end a turn with only files. Maintain requirements.md (create first, update when needs change) and memory.md (update after every build or edit). Apps must be responsive and keep data in localStorage. The user may attach images or videos: study them and recreate the design. A complete build also has package.json, metadata.json, README.md and a Makefile. Verify your files, follow the security skill, follow the edit-responsibility skill, fix every error the server reports.`;
@@ -1458,6 +1483,13 @@ async function runAgentJob(
     return;
   }
 
+  const plan = await createGeminiPlan(String(rawMessages[rawMessages.length - 1]?.text || ''), 'build');
+  if (plan) emitJobEvent(job, { type: 'plan', plan });
+  if (plan?.instructions && conversation.length) {
+    const last = conversation[conversation.length - 1];
+    if (last.role === 'user') last.text += `\n\n[Gemini planner instructions for the selected executor]\n${plan.instructions}\nQuality checklist: ${(plan.qualityChecklist || []).join('; ')}`;
+  }
+
   const firstUserPrompt = String(
     rawMessages.find((m) => m.role === 'user')?.text || rawMessages[0]?.text || ''
   );
@@ -2535,7 +2567,7 @@ async function generateGeminiNativeImage(
 ): Promise<{ url: string; model: string; aspectRatio: string }> {
   const ai = getGenAIClient();
   if (Date.now() < geminiImgCooldownUntil) throw new Error('Gemini image quota/limit chal raha hai, kuch der baad dobara try hoga');
-  const candidates = [process.env.GEMINI_IMAGE_MODEL, 'gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-3.1-flash-lite-image'].filter(Boolean) as string[];
+  const candidates = [process.env.GEMINI_IMAGE_MODEL, 'gemini-3-pro-image', 'gemini-3.1-flash-image'].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i) as string[];
   const size = process.env.GEMINI_IMAGE_SIZE || '2K';
   let lastErr = '';
   for (const model of candidates) {
@@ -2593,55 +2625,8 @@ async function generateGeminiImage(
     }
   }
 
-  // 2. Fallback: Real subject photograph lookup (Wikipedia & Wikimedia Commons)
-  const wikiImg = await fetchWikimediaRasterImage(prompt);
-  if (wikiImg) {
-    return {
-      url: `data:${wikiImg.mimeType};base64,${wikiImg.buffer.toString('base64')}`,
-      model: 'wikimedia photo (fallback)',
-      aspectRatio: validRatio,
-    };
-  }
-
-  // 3. Pollinations Flux raster generator fallback
-  const { width, height } = getDimensionsForAspectRatio(validRatio);
-  const { cleanPrompt } = extractSubjectSearchQueries(prompt);
-  if (Date.now() > pollinationsCooldownUntil) {
-    const seed = Math.floor(Math.random() * 900000) + 100000;
-    const fluxEndpoint = `https://image.pollinations.ai/prompt/${encodeURIComponent(
-      cleanPrompt
-    )}?width=${width}&height=${height}&nologo=true&seed=${seed}&model=flux`;
-    try {
-      const { buffer, mimeType } = await fetchRasterImageIPv4(fluxEndpoint, 8000);
-      return {
-        url: `data:${mimeType};base64,${buffer.toString('base64')}`,
-        model: 'pollinations flux (fallback)',
-        aspectRatio: validRatio,
-      };
-    } catch (err: any) {
-      const msg = String(err?.message || err || '');
-      if (msg.includes('HTTP_402') || msg.includes('HTTP_429')) {
-        pollinationsCooldownUntil = Date.now() + 48000;
-      }
-    }
-  }
-
-  // 4. Fallback real nature/wildlife photograph from Wikimedia Commons
-  const fallbackPhoto = await fetchWikimediaRasterImage('wildlife nature landscape photography');
-  if (fallbackPhoto) {
-    return {
-      url: `data:${fallbackPhoto.mimeType};base64,${fallbackPhoto.buffer.toString('base64')}`,
-      model: 'wikimedia photo (fallback)',
-      aspectRatio: validRatio,
-    };
-  }
-
-  const pngBuffer = generateValidPngBuffer(width, height);
-  return {
-    url: `data:image/png;base64,${pngBuffer.toString('base64')}`,
-    model: 'placeholder (image generation fail hui)',
-    aspectRatio: validRatio,
-  };
+  // Never return stock photos or synthetic placeholders when generation fails.
+  throw new Error(fails.join(' | ') || 'All configured image models failed. Please retry.');
 }
 
 app.post('/api/chat/image', async (req, res) => {
@@ -2710,11 +2695,12 @@ app.post('/api/chat/stream', async (req, res) => {
     }
 
     const requestedModel = normalizeGeminiChatModel(model);
-    const systemInstruction = loadChatSkillsPrompt();
-
     const rawMessages = Array.isArray(messages) ? messages : [];
     const lastMsg = rawMessages[rawMessages.length - 1];
     const lastUserText = String(lastMsg?.text || '').trim();
+    const plan = await createGeminiPlan(lastUserText, 'chat');
+    const systemInstruction = `${loadChatSkillsPrompt()}\n\nGemini planner brief: ${plan?.instructions || 'Use your own judgment.'}\nQuality checklist: ${(plan?.qualityChecklist || []).join('; ')}`;
+    if (plan) sendEvent({ type: 'plan', plan });
     const lastAtts: AttachmentInput[] =
       Array.isArray(attachments) && attachments.length > 0
         ? attachments
@@ -2741,7 +2727,7 @@ app.post('/api/chat/stream', async (req, res) => {
 
     // Fast path for direct image generation requests
     if (directImage && lastUserText) {
-      let promptToGenerate = lastUserText;
+      let promptToGenerate = plan?.image?.prompt || plan?.instructions || lastUserText;
       if (/ui design image/i.test(lastUserText) && rawMessages.length >= 2) {
         const prevUser = [...rawMessages.slice(0, -1)].reverse().find((m: any) => m.role === 'user');
         if (prevUser?.text) {

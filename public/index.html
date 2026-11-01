@@ -2154,6 +2154,7 @@ ${combinedCss}
 
         const hasThought = Boolean(msg.thought && msg.thought.trim()) || Boolean(msg.running);
         const liveHeading = msg.heading || extractBoldHeading(msg.thought) || (msg.running ? 'Thinking...' : 'Thought summary');
+        const plan = msg.plan || null;
         const filesList = Array.isArray(msg.files) ? msg.files : [];
         const cmdsList = Array.isArray(msg.cmds) ? msg.cmds : [];
 
@@ -2187,6 +2188,7 @@ ${combinedCss}
               </div>
             )}
 
+            {msg.plan && <details className="trace-card" open><summary className="trace-header">Gemini plan · {msg.plan.goal || 'Build plan'}</summary><div className="trace-body"><ol>{(msg.plan.steps || []).map((step, i) => <li key={i}>{step}</li>)}</ol>{msg.plan.instructions && <p>{msg.plan.instructions}</p>}</div></details>}
             {/* 2. File rows */}
             {filesList.map((f, idx) => (
               <div
@@ -2420,6 +2422,7 @@ ${combinedCss}
           let headingAcc = '';
           let textAcc = '';
           let errorAcc = '';
+          let planAcc = null;
           const filesMap = new Map();
           const cmdsMap = new Map();
 
@@ -2439,6 +2442,7 @@ ${combinedCss}
                     error: errorAcc,
                     files: Array.from(filesMap.values()),
                     cmds: Array.from(cmdsMap.values()),
+                    plan: planAcc,
                   };
                 });
                 return {
@@ -2461,7 +2465,10 @@ ${combinedCss}
               return;
             }
 
-            if (ev.type === 'thought') {
+            if (ev.type === 'plan') {
+              planAcc = ev.plan || null;
+              syncMessageState(true, null);
+            } else if (ev.type === 'thought') {
               thoughtAcc += ev.text || '';
               if (ev.heading) headingAcc = ev.heading;
               syncMessageState(true, null);
@@ -2571,6 +2578,7 @@ ${combinedCss}
           const aiMsgId = `ai_${Date.now() + 1}`;
           const aiMsg = {
             id: aiMsgId,
+            plan: null,
             role: 'ai',
             running: true,
             thought: '',
@@ -2684,6 +2692,7 @@ ${combinedCss}
           const aiMsgId = `ai_${Date.now() + 1}`;
           const aiMsg = {
             id: aiMsgId,
+            plan: null,
             role: 'ai',
             running: true,
             thought: '',
@@ -4539,6 +4548,7 @@ ${code}
               </div>
             )}
 
+            {msg.plan && <details className="cm-thought-card" open><summary className="cm-thought-header">Gemini plan · {msg.plan.goal || 'Request plan'}</summary><div className="cm-thought-body"><ol>{(msg.plan.steps || []).map((step, i) => <li key={i}>{step}</li>)}</ol>{msg.plan.instructions}</div></details>}
             {msg.text && <ChatRichMessageContent text={msg.text} onSelectOption={onSelectOption} />}
 
             {msg.imageLoading && (
@@ -4642,7 +4652,7 @@ ${code}
         const [plusMenuOpen, setPlusMenuOpen] = useState(false);
         const [input, setInput] = useState('');
         const [chatAttachments, setChatAttachments] = useState([]);
-        const [aspectRatio, setAspectRatio] = useState('1:1');
+        const [aspectRatio, setAspectRatio] = useState('16:9');
         const [imageModel, setImageModelState] = useState(() => { try { return localStorage.getItem('aib_image_model') || 'gemini'; } catch { return 'gemini'; } });
         const setImageModel = (v) => { setImageModelState(v); try { localStorage.setItem('aib_image_model', v); } catch {} };
         const [forceImageMode, setForceImageMode] = useState(false);
@@ -4733,6 +4743,7 @@ ${code}
           const aiMsgId = `cai_${Date.now() + 1}`;
           const aiMsg = {
             id: aiMsgId,
+            plan: null,
             role: 'ai',
             running: true,
             thought: '',
@@ -4765,6 +4776,7 @@ ${code}
           let imagesAcc = [];
           let imgLoadingState = null;
           let errorAcc = '';
+          let planAcc = null;
 
           const syncAiMsg = (stillRunning) => {
             setSessions((prev) =>
@@ -4784,6 +4796,7 @@ ${code}
                           images: [...imagesAcc],
                           imageLoading: imgLoadingState,
                           error: errorAcc,
+                          plan: planAcc,
                         }
                   ),
                 };
@@ -4839,7 +4852,10 @@ ${code}
                   continue;
                 }
 
-                if (ev.type === 'thought') {
+                if (ev.type === 'plan') {
+                  planAcc = ev.plan || null;
+                  syncAiMsg(true);
+                } else if (ev.type === 'thought') {
                   thoughtAcc += ev.text || '';
                   if (ev.heading) headingAcc = ev.heading;
                   syncAiMsg(true);
