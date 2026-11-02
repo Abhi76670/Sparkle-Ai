@@ -1,0 +1,2 @@
+# Visual Reference to Responsive Code
+Treat uploaded screenshots/images as design references. Inspect page hierarchy, grid, widths, margins, spacing, font scale, palette, shadows, borders, radii, icons, imagery, buttons, form states and visible behavior. Recreate the closest practical layout, not just the color scheme. Build responsive mobile/tablet/desktop variants, accessible semantics and working interactions. Do not invent unseen backend behavior; use explicit safe demo states when APIs are unavailable.

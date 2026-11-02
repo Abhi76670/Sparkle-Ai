@@ -1,0 +1,2 @@
+# Database Testing
+Verify the chosen database provider, connection configuration, server-side secret handling, schema/migrations, least-privilege access, read/write behavior, validation and error handling. Use test/development data only. Do not expose credentials or dump private records. If access is not configured, provide the exact environment variable names and a clear setup step rather than claiming connectivity.

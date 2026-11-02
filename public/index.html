@@ -1516,6 +1516,29 @@
 
       // Page builder for both Preview (forPreview = true) and Standalone ZIP (forPreview = false)
       function buildProjectHtml(files, forPreview) {
+        files = { ...(files || {}) };
+        if (forPreview && files['package.json']) {
+          try {
+            const pkg = JSON.parse(files['package.json']);
+            const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+            if (deps.vite || deps.next || deps['react-scripts']) {
+              return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101114;color:#f5f5f5;font:14px system-ui;padding:24px;box-sizing:border-box}.card{max-width:560px;border:1px solid #30323a;border-radius:18px;background:#191b21;padding:26px;line-height:1.65}.muted{color:#a1a1aa}code{color:#93c5fd;background:#252833;padding:3px 6px;border-radius:6px}</style></head><body><div class="card"><h2>Framework preview required</h2><p>This project uses a build framework (${deps.next ? 'Next.js' : deps.vite ? 'Vite' : 'React Scripts'}). The current instant preview supports browser-ready React/JS projects, not a running framework dev server.</p><p class="muted">Use the Build Mode terminal to install dependencies, run the project build/type-check, and review the exact output. The source files remain available in the Code tab and ZIP export.</p><p><code>npm install</code> → <code>npm run dev</code> / <code>npm run build</code></p></div></body></html>`;
+            }
+          } catch (_) {}
+        }
+        // Generated raster assets are stored as base64 markers in project state and
+        // converted to data URLs only for the in-browser preview.
+        Object.entries(files).forEach(([assetPath, raw]) => {
+          if (typeof raw !== 'string' || !raw.startsWith('__AIB_BINARY_BASE64__:')) return;
+          const dataUrl = `data:image/png;base64,${raw.slice('__AIB_BINARY_BASE64__:'.length)}`;
+          Object.keys(files).forEach((sourcePath) => {
+            if (sourcePath === assetPath || typeof files[sourcePath] !== 'string') return;
+            files[sourcePath] = files[sourcePath]
+              .split(assetPath).join(dataUrl)
+              .split('/' + assetPath).join(dataUrl)
+              .split('./' + assetPath).join(dataUrl);
+          });
+        });
         const allPaths = Object.keys(files || {});
         const cssPaths = allPaths.filter((p) => /\.css$/i.test(p)).sort();
         const jsPaths = allPaths
@@ -2302,6 +2325,8 @@ ${combinedCss}
         const chatScrollRef = useRef(null);
         const eventSourceRef = useRef(null);
         const seenErrorsRef = useRef(new Set());
+        const runtimeFixAttemptsRef = useRef(0);
+        const startAgentRunRef = useRef(null);
 
         // Persist to localStorage
         useEffect(() => {
@@ -2369,6 +2394,19 @@ ${combinedCss}
                     };
                   })
                 );
+                // Bounded automatic runtime recovery: never create an endless fix loop.
+                if (runtimeFixAttemptsRef.current < 2 && startAgentRunRef.current) {
+                  runtimeFixAttemptsRef.current += 1;
+                  const round = runtimeFixAttemptsRef.current;
+                  setTimeout(() => {
+                    startAgentRunRef.current?.(
+                      currentProjectId,
+                      `Auto-fix runtime error (round ${round}/2). Analyze this exact preview console error, inspect the current project files, fix only the affected files completely, preserve all existing features, and run the relevant checks. Error:\n${msg}`,
+                      [],
+                      true
+                    );
+                  }, 250);
+                }
               }
             }
           };
@@ -2564,7 +2602,7 @@ ${combinedCss}
           }
         }, [currentProjectId]);
 
-        const startAgentRun = async (projId, promptText, atts = []) => {
+        const startAgentRun = async (projId, promptText, atts = [], isAutomaticFix = false) => {
           const targetProj = projects.find((p) => p.id === projId);
           const existingMessages = targetProj ? targetProj.messages || [] : [];
           const existingFiles = targetProj ? targetProj.files || {} : {};
@@ -2589,7 +2627,8 @@ ${combinedCss}
             cmds: [],
           };
 
-          // Reset console logs & seen runtime errors at the start of every AI run
+          // Reset runtime recovery budget only for a fresh user request, not for auto-fix rounds.
+          if (!isAutomaticFix) runtimeFixAttemptsRef.current = 0;
           setLogs([]);
           seenErrorsRef.current.clear();
           setIsRunning(true);
@@ -2657,6 +2696,8 @@ ${combinedCss}
           }
         };
 
+        startAgentRunRef.current = startAgentRun;
+
         const handleStartFromHome = () => {
           const text = homePrompt.trim();
           if (!text) return;
@@ -2703,6 +2744,7 @@ ${combinedCss}
             cmds: [],
           };
 
+          runtimeFixAttemptsRef.current = 0;
           setLogs([]);
           seenErrorsRef.current.clear();
           setIsRunning(true);
@@ -2808,7 +2850,11 @@ ${combinedCss}
           const files = { ...(currentProject.files || {}) };
 
           Object.entries(files).forEach(([path, content]) => {
-            zip.file(path, content);
+            if (typeof content === 'string' && content.startsWith('__AIB_BINARY_BASE64__:')) {
+              zip.file(path, content.slice('__AIB_BINARY_BASE64__:'.length), { base64: true });
+            } else {
+              zip.file(path, content);
+            }
           });
 
           const standaloneHtml = buildProjectHtml(files, false);
@@ -3338,7 +3384,7 @@ ${combinedCss}
                                   className={`file-chip ${selectedFile === filePath ? 'active' : ''}`}
                                   onClick={() => setSelectedFile(filePath)}
                                 >
-                                  <span>{filePath}</span>
+                                  <span>{String(currentProject.files?.[filePath] || '').startsWith('__AIB_BINARY_BASE64__:') ? '🖼️ ' : ''}{filePath}</span>
                                   <button
                                     type="button"
                                     className="chip-del"
@@ -3363,6 +3409,16 @@ ${combinedCss}
                         </div>
                         <div className="code-editor-pane">
                           {selectedFile && currentProject.files?.[selectedFile] !== undefined ? (
+                            String(currentProject.files[selectedFile] || '').startsWith('__AIB_BINARY_BASE64__:') ? (
+                              <div style={{ padding: 20, display: 'grid', placeItems: 'center', width: '100%', minHeight: 220 }}>
+                                <img
+                                  src={`data:image/png;base64,${String(currentProject.files[selectedFile]).slice('__AIB_BINARY_BASE64__:'.length)}`}
+                                  alt={selectedFile}
+                                  style={{ maxWidth: '100%', maxHeight: '65vh', objectFit: 'contain', borderRadius: 12, border: '1px solid #333' }}
+                                />
+                                <div style={{ color: '#888', fontSize: 12, marginTop: 10 }}>{selectedFile} · Generated image asset</div>
+                              </div>
+                            ) : (
                             <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: 'fit-content' }}>
                               <div
                                 style={{
@@ -3398,6 +3454,7 @@ ${combinedCss}
                                 }}
                               />
                             </div>
+                            )
                           ) : (
                             <span style={{ color: '#64748b', fontStyle: 'italic' }}>
                               // Select a file above to view its live code

@@ -1,0 +1,2 @@
+# Visual Quality Check
+Review the preview against the requested product and any supplied reference. Check hierarchy, typography, spacing rhythm, contrast, alignment, consistency, responsive behavior, content quality, loading/empty/error/success states and interactions. Prefer a distinctive domain-specific design over a generic template. State which checks were actually performed and what remains unverified.

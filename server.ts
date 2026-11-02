@@ -7,7 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import zlib from 'zlib';
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 // Force IPv4 first and disable autoSelectFamily to avoid IPv6 blackhole delays in containers
@@ -138,7 +138,7 @@ async function createGeminiPlan(prompt: string, mode: 'chat' | 'build') {
   try {
     const ai = getGenAIClient();
     const result: any = await Promise.race([
-      ai.models.generateContent({ model: PLANNER_MODEL, contents: `Return ONLY JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any }),
+      ai.models.generateContent({ model: PLANNER_MODEL, contents: `You are Gemini, the lead architect and planner. Return ONLY valid JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For non-image builds, instructions MUST be a detailed executor-ready implementation brief covering project inspection, architecture, pages/components, responsive behavior, data model, API contracts, dependencies, integration prerequisites, security, edge cases and exact verification commands. For integrations (payment/database/auth/third-party API), identify provider, official docs, API base URL, auth method, required env var NAMES, schemas, webhook needs, sandbox and test plan; if essential info is missing, tell executor to ask one focused question and wait for the answer before implementing provider-specific code. Do not ask about details that can safely use sensible defaults. Require Gemini's full brief to be forwarded unchanged with the original user message to the selected executor model. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any }),
       new Promise((_, reject) => timer.signal.addEventListener('abort', () => reject(new Error('Planner timeout')), { once: true }))
     ]);
     const raw = result?.text || result?.candidates?.[0]?.content?.parts?.map((x: any) => x.text || '').join('') || '';
@@ -176,32 +176,38 @@ const SKILL_NAMES = [
   'error-free',
   'gemini-planner', 'image-generation', 'youtube-thumbnail', 'image-editing',
   'face-preservation', 'image-router', 'code-quality', 'auto-fix', 'task-answering',
+  'advanced-web-architecture', 'responsive-product-engineering', 'gemini-build-orchestrator',
+  'integration-discovery', 'api-contract-engineering', 'terminal-integration-verification',
+  'database-engineering', 'payment-gateway-integration', 'build-quality-gates',
 ];
 
-const BASE_SYSTEM_PROMPT = `You are an AI app builder inside a dashboard, with your own terminal. Projects are simple React 18 apps with NO build step and NO imports/exports. Files are plain scripts run in the browser with Babel; React and ReactDOM are globals. Always have src/App.jsx defining function App(). Extra components go in other src/*.jsx files (loaded alphabetically, App.jsx last). Styles go in src/styles.css. Output format (never in markdown code fences): write or edit a file with the full content using <file path="src/App.jsx">full content</file>; delete with <delete path="src/Old.jsx"/>; run a terminal command with <run>shell command</run>; after <run> tags stop and wait for results. Everything outside tags is your reply. You are given the current project files: only write files that need to change. If the user only asks a question, answer in plain text and do not write files. Before building, think about audience, sections, believable content (never lorem ipsum) and a distinctive style. A build is complete only when src/App.jsx and src/styles.css exist; for a very vague request build a good first version and ask 1-2 questions at the end. Always finish with a short reply in the user's language; never end a turn with only files. Maintain requirements.md (create first, update when needs change) and memory.md (update after every build or edit). Apps must be responsive and keep data in localStorage. The user may attach images or videos: study them and recreate the design. A complete build also has package.json, metadata.json, README.md and a Makefile. Verify your files, follow the security skill, follow the edit-responsibility skill, fix every error the server reports.`;
+const BASE_SYSTEM_PROMPT = `You are an AI app builder inside a dashboard, with your own terminal. Inspect and preserve the project's existing framework and conventions first. For new projects, default to the browser-preview-compatible React 18 setup (no build step, no imports/exports, React/ReactDOM globals) unless the user requests a different stack or the project already uses one. In browser-preview mode, use src/App.jsx defining function App(), extra src/*.jsx components loaded alphabetically with App.jsx last, and src/styles.css. For Vite/Next/TypeScript or another explicitly requested framework, use its correct imports, entrypoints, types and package scripts instead of forcing browser-global conventions. Output format (never in markdown code fences): write or edit a file with the full content using <file path="src/App.jsx">full content</file>; delete with <delete path="src/Old.jsx"/>; run a single supported terminal command with <run>command</run> (never chain commands; use one <run> per turn); after <run> tags stop and wait for results. Everything outside tags is your reply. You are given the current project files: only write files that need to change. If the user only asks a question, answer in plain text and do not write files. Before building, inspect the existing project and think about audience, complete user journeys, architecture, data/API contracts, integrations, believable content (never lorem ipsum), responsive states and a distinctive subject-specific design. Aim for polished, production-minded web experiences: coherent visual identity, excellent typography, intentional spacing, clear hierarchy, accessible contrast, useful micro-interactions, realistic content, empty/loading/error/success states, and working controls. Do not output a generic dashboard template when the domain calls for a tailored experience. For reference images, inspect layout, hierarchy, spacing, typography, colors, components and visible interactions, then recreate the design faithfully while making it responsive. For video references, use the provided Gemini video-analysis brief and map visible page transitions, interactions and animations into an implementation spec. If a critical requirement is genuinely missing (for example payment provider, API base URL, database choice, auth mode, or required credentials), ask one concise clarification question and stop before inventing an integration; otherwise make sensible reversible defaults and proceed. If the user asks a question rather than requesting a code change, answer it directly and do not modify files. A browser-preview-mode build is complete only when src/App.jsx and src/styles.css exist; framework projects must include their actual required entrypoints and scripts. If the current preview runtime cannot execute that framework, state the exact limitation rather than showing a fake preview. For a very vague request ask one essential question before making irreversible/provider-specific choices; otherwise build a useful first version. Always finish with a short reply in the user's language; never end a turn with only files. Maintain requirements.md (create first, update when needs change) and memory.md (update after every build or edit). Apps must be responsive from 320px and keep appropriate client data in localStorage. For integrations, discover provider, official docs, API base URL, auth, schemas, sandbox and acceptance checks before implementation; ask for missing essentials rather than inventing them. Keep secrets server-side. Use the terminal and curl only with verified API contracts and safe sandbox/test operations; never trigger live charges or destructive actions without explicit authorization. The user may attach images or videos: study them and recreate the design. When a project needs a custom visual asset (hero artwork, illustration, product visual, background or logo), request a real raster image by emitting <generate_image aspect_ratio="16:9">a complete art-directed prompt</generate_image> in the main response; the server will generate it, add it to public/assets, and return the exact path for you to use. Use the generated asset in the actual page rather than leaving it unused. Never fake an image with a gradient or placeholder when a real asset was requested. A complete build also has package.json, metadata.json, README.md and a Makefile. Use only one terminal command per <run> tag; no shell chaining, pipes or redirection. Verify your files, follow the security skill, follow the edit-responsibility skill, fix every error the server reports.`;
 
 function buildFullSystemPrompt(isNvidia: boolean): string {
   const skillsDir = path.join(process.cwd(), 'skills');
   const loadedSkills: string[] = [];
 
-  for (const name of SKILL_NAMES) {
-    const skillPath = path.join(skillsDir, name, 'SKILL.md');
-    try {
-      if (fs.existsSync(skillPath)) {
-        const raw = fs.readFileSync(skillPath, 'utf8');
-        const cleaned = raw.replace(/^---[\s\S]*?---\s*/, '').trim();
-        loadedSkills.push(`[SKILL: ${name}]\n${cleaned}`);
+  // Dynamically load every installed skill so newly added skills are never skipped.
+  try {
+    if (fs.existsSync(skillsDir)) {
+      for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (!entry.isDirectory()) continue;
+        const skillPath = path.join(skillsDir, entry.name, 'SKILL.md');
+        if (!fs.existsSync(skillPath)) continue;
+        try {
+          const raw = fs.readFileSync(skillPath, 'utf8');
+          const cleaned = raw.replace(/^---[\s\S]*?---\s*/, '').trim();
+          if (cleaned) loadedSkills.push(`[SKILL: ${entry.name}]\n${cleaned}`);
+        } catch { /* continue loading remaining skills */ }
       }
-    } catch {
-      // ignore read errors
     }
-  }
+  } catch { /* keep the base prompt if skills are unavailable */ }
 
   let prompt =
     BASE_SYSTEM_PROMPT +
     '\n\nCRITICAL EXECUTION RULES:\n' +
     '1. Keep your thinking very concise (1-2 short paragraphs starting with a **Bold Heading** like **Designing App Layout**), then IMMEDIATELY write all files using <file path="...">...</file> tags in the main response (never inside thinking).\n' +
-    '2. Do NOT emit <run> tags to syntax-check code, because the server automatically runs "$ check code (esbuild)" on all your files as soon as you finish writing them.\n\n' +
+    '2. Do not waste a <run> command on syntax-only checks because the server runs esbuild/JSON/HTML checks automatically. DO use <run> for dependency installation, real project build, type-check, tests, and verified sandbox API/CURL checks. Run one command per tag and wait for the output.\n\n' +
     '# LOADED SKILLS\n\n' +
     loadedSkills.join('\n\n');
 
@@ -295,7 +301,7 @@ app.get('/api/models', async (_req, res) => {
 });
 
 interface JobEvent {
-  type: 'meta' | 'project_name' | 'thought' | 'text' | 'file' | 'cmd' | 'error' | 'done';
+  type: 'meta' | 'project_name' | 'plan' | 'thought' | 'text' | 'file' | 'cmd' | 'error' | 'done';
   [key: string]: any;
 }
 
@@ -403,40 +409,77 @@ function syncFromTempDir(
   return out;
 }
 
+function parseWorkspaceCommand(command: string): { bin: string; args: string[] } | null {
+  const raw = String(command || '').trim();
+  if (!raw || raw.length > 2000) return null;
+  if (/\.env(?!\.example)|(^|\s)(credentials|secrets?)\.(json|ya?ml)|id_rsa|\.pem\b/i.test(raw)) return null;
+  // Execute without a shell: block chaining, substitutions, pipes and redirection.
+  if (/[;&|`<>\n\r]/.test(raw) || /\$\(|\$\{|\$(?![A-Z_][A-Z0-9_]*\b)/.test(raw)) return null;
+  const tokens = raw.match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  const requestedEnvNames = [...raw.matchAll(/\$([A-Z_][A-Z0-9_]*)\b/g)].map((m) => m[1]);
+  if (requestedEnvNames.some((key) => !process.env[key])) return null;
+  const values = tokens.map((token) => token.replace(/^(['"])(.*)\1$/, '$2')).map((token) =>
+    token.replace(/\$([A-Z_][A-Z0-9_]*)\b/g, (_match, key) => String(process.env[key] || ''))
+  );
+  const bin = values.shift() || '';
+  const base = path.basename(bin);
+  const allowed = new Set(['npm', 'npx', 'node', 'python', 'python3', 'curl', 'ls', 'cat', 'pwd', 'find', 'grep', 'head', 'tail', 'tsc', 'vite', 'eslint']);
+  if (!allowed.has(base)) return null;
+  if (values.some((value) => value === '..' || value.startsWith('../') || value.includes('/../'))) return null;
+  if (base === 'npx' && !['vite', 'tsc', 'eslint', 'serve', 'prettier'].includes(values[0])) return null;
+  if (base === 'npm' && !['install', 'ci', 'run', 'test', 'ls', 'view'].includes(values[0])) return null;
+  if (base === 'npm' && values[0] === 'run' && !['build', 'lint', 'test', 'typecheck', 'type-check', 'check'].includes(values[1])) return null;
+  return { bin, args: values };
+}
+
 function runShellCommand(cmd: string, cwd: string): Promise<{ ok: boolean; output: string }> {
   return new Promise((resolve) => {
-    const trimmed = cmd.trim();
-    if (
-      /(^|\s)(sudo|rm\s+-rf\s+\/|mkfs|dd\s+if=|:\(\)\{)/i.test(trimmed) ||
-      /curl\s+.*\|\s*(sh|bash)/i.test(trimmed)
-    ) {
+    const parsed = parseWorkspaceCommand(cmd);
+    if (!parsed) {
       resolve({
         ok: false,
-        output: 'Blocked unsafe command by security policy.',
+        output: 'Command blocked by workspace policy. Run one supported command at a time (npm install, npm run build/lint/test/typecheck, npx vite/tsc/eslint, curl, node, python, ls, cat, grep, find). Shell chaining, pipes, redirection and destructive commands are disabled.'
       });
       return;
     }
-
-    exec(
-      trimmed,
-      {
-        cwd,
-        timeout: 30000,
-        maxBuffer: 2 * 1024 * 1024,
-        env: { ...process.env, PAGER: 'cat', CI: 'true' },
-      },
-      (error, stdout, stderr) => {
-        const combined = `${stdout || ''}${stderr ? (stdout ? '\n' : '') + stderr : ''}`.trim();
-        const capped =
-          combined.length > 8000 ? combined.slice(0, 8000) + '\n...[output truncated]' : combined;
-        if (error) {
-          const errMsg = capped || error.message || 'Command failed';
-          resolve({ ok: false, output: errMsg });
-        } else {
-          resolve({ ok: true, output: capped || '(completed with no output)' });
-        }
-      }
-    );
+    const args = [...parsed.args];
+    // Prevent untrusted dependency lifecycle scripts from executing during installation.
+    if (path.basename(parsed.bin) === 'npm' && ['install', 'ci'].includes(args[0]) && !args.includes('--ignore-scripts')) args.push('--ignore-scripts');
+    const safeEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env as Record<string, string | undefined>)) {
+      if (value && !/(KEY|TOKEN|SECRET|PASSWORD|PRIVATE|CREDENTIAL)/i.test(key)) safeEnv[key] = value;
+    }
+    safeEnv.PAGER = 'cat';
+    safeEnv.CI = 'true';
+    const child = spawn(parsed.bin, args, {
+      cwd,
+      env: safeEnv,
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let output = '';
+    let settled = false;
+    const append = (chunk: Buffer) => {
+      output += chunk.toString('utf8');
+      if (output.length > 12000) output = output.slice(-12000);
+    };
+    child.stdout.on('data', append);
+    child.stderr.on('data', append);
+    const timer = setTimeout(() => child.kill('SIGTERM'), 30000);
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: false, output: `${output}\n${err.message}`.trim() });
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const finalOutput = output.trim() || (code === 0 ? '(completed with no output)' : `Process exited with code ${code}`);
+      resolve({ ok: code === 0, output: finalOutput.length > 8000 ? finalOutput.slice(0, 8000) + '\n...[output truncated]' : finalOutput });
+    });
   });
 }
 
@@ -470,7 +513,7 @@ async function checkCodeWithEsbuild(
   const jsFiles = Object.keys(files)
     .filter(
       (f) =>
-        /\.(jsx|js)$/i.test(f) &&
+        /\.(jsx?|tsx?)$/i.test(f) &&
         !f.startsWith('node_modules/') &&
         f !== 'next.config.js' &&
         f !== 'vite.config.js'
@@ -531,8 +574,10 @@ async function checkCodeWithEsbuild(
 
     if (esbuildMod) {
       try {
+        const ext = path.extname(filePath).toLowerCase();
+        const loader = ext === '.tsx' ? 'tsx' : ext === '.ts' ? 'ts' : 'jsx';
         await esbuildMod.transform(code, {
-          loader: 'jsx',
+          loader,
           target: 'es2020',
           sourcefile: filePath,
         });
@@ -569,6 +614,37 @@ async function checkCodeWithEsbuild(
     }
   }
 
+  for (const [filePath, content] of Object.entries(files)) {
+    if (/\.json$/i.test(filePath)) {
+      try { JSON.parse(content); } catch (err: any) { errors.push(`${filePath}: invalid JSON — ${err?.message || 'parse error'}`); }
+    }
+    if (/\.html?$/i.test(filePath)) {
+      const stack: string[] = [];
+      const voidTags = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+      const optionalClose = new Set(['p','li','dt','dd','option','tr','td','th']);
+      const htmlStructure = content.replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '');
+      const tagRe = /<!--([\s\S]*?)-->|<![^>]*>|<\/?([a-zA-Z][\w:-]*)\b[^>]*>/g;
+      let tagMatch: RegExpExecArray | null;
+      while ((tagMatch = tagRe.exec(htmlStructure))) {
+        if (!tagMatch[2]) continue;
+        const token = tagMatch[0];
+        const name = tagMatch[2].toLowerCase();
+        if (token.startsWith('</')) {
+          let top = stack.pop();
+          if (top !== name && top && optionalClose.has(top)) top = stack.pop();
+          if (top !== name) { errors.push(`${filePath}: mismatched closing tag </${name}>${top ? `; expected </${top}>` : ''}`); break; }
+        } else if (!voidTags.has(name) && !/\/\s*>$/.test(token)) {
+          if (stack.length && optionalClose.has(stack[stack.length - 1]) &&
+              ((stack[stack.length - 1] === 'p' && ['div','section','article','header','footer','main','h1','h2','h3','ul','ol','form'].includes(name)) ||
+               (stack[stack.length - 1] === 'li' && name === 'li') ||
+               (stack[stack.length - 1] === 'option' && name === 'option'))) stack.pop();
+          stack.push(name);
+        }
+      }
+      if (stack.length) errors.push(`${filePath}: unclosed HTML tag(s): ${stack.slice(-5).join(', ')}`);
+    }
+  }
+
   if (errors.length > 0) {
     return {
       ok: false,
@@ -579,7 +655,7 @@ async function checkCodeWithEsbuild(
 
   return {
     ok: true,
-    output: `Checked ${jsFiles.length} script file(s) with esbuild: syntax OK, no import/export issues, App component verified.`,
+    output: `Checked ${jsFiles.length} JS/TS file(s) with esbuild; JSON and HTML structure checks passed; entrypoint rules applied where relevant.`,
     errors: [],
   };
 }
@@ -832,6 +908,18 @@ function formatFilesSnapshot(files: Record<string, string>): string {
   }
   const parts: string[] = ['Current project files:'];
   for (const k of keys) {
+    if (String(files[k] || '').startsWith('__AIB_BINARY_BASE64__:')) {
+      parts.push(`<current_file path="${k}">[binary image asset already available; use this path in the UI]</current_file>`);
+      continue;
+    }
+    if (/^\.env(?:$|\.(?!example$))/i.test(k) || /(^|\/)(credentials|secrets?)\.(json|ya?ml)$/i.test(k)) {
+      const redacted = String(files[k] || '').split(/\r?\n/).map((line) => {
+        const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+        return match ? `${match[1]}=[REDACTED]` : (line.trim() ? '[REDACTED]' : '');
+      }).join('\n');
+      parts.push(`<current_file path="${k}">\n${redacted}\n</current_file>`);
+      continue;
+    }
     parts.push(`<current_file path="${k}">\n${files[k]}\n</current_file>`);
   }
   return parts.join('\n\n');
@@ -1421,25 +1509,107 @@ async function streamNvidiaTurn(
   );
 }
 
-function LooksLikeQuestionOnly(userText: string, hasExistingFiles: boolean): boolean {
+function LooksLikeQuestionOnly(userText: string, _hasExistingFiles: boolean): boolean {
   const t = userText.trim();
-  if (
-    /^(what is required for|explain|how does|why does|what does|can you explain)\b/i.test(t) &&
-    !/\b(build|create|make|add|change|update|fix|write|implement)\b/i.test(t)
-  ) {
-    return true;
+  if (!t) return true;
+  const asksForInformation = /^(what|why|how|when|where|who|which|is|are|am|do|does|did|can|could|would|should|will|explain|describe|tell me|help me understand|what is required for)\b/i.test(t) || /\\?\s*$/.test(t);
+  const asksForChange = /\b(build|create|make|add|change|update|fix|write|implement|remove|delete|style|redesign|integrate|generate|develop|modify|refactor|convert)\b/i.test(t);
+  return asksForInformation && !asksForChange && t.length < 1200;
+}
+
+async function analyzeBuildImageReferences(
+  attachments: AttachmentInput[],
+  emit: (event: JobEvent) => void
+): Promise<string> {
+  const images = (attachments || []).filter((a) => String(a?.mimeType || '').startsWith('image/'));
+  if (!images.length) return '';
+  if (!getGeminiApiKey()) return 'Image reference attached, but Gemini visual analysis is unavailable because GEMINI_API_KEY is not configured.';
+  const ai = getGenAIClient();
+  const parts: any[] = [];
+  for (const image of images.slice(0, 6)) {
+    const data = stripDataUrlPrefix(String(image.data || ''));
+    if (!data) continue;
+    if (Buffer.byteLength(data, 'base64') > 15 * 1024 * 1024) continue;
+    parts.push({ inlineData: { mimeType: image.mimeType, data } });
+    parts.push({ text: `Reference image: ${image.name || 'uploaded image'}.` });
   }
-  if (
-    hasExistingFiles &&
-    /\?$/.test(t) &&
-    t.length < 160 &&
-    !/\b(build|create|make|add|change|update|fix|write|implement|remove|delete|style|redesign)\b/i.test(
-      t
-    )
-  ) {
-    return true;
+  if (!parts.some((p) => p.inlineData)) return 'Image reference could not be read. Ask for a smaller image or screenshot.';
+  emit({ type: 'thought', text: '\n**Analyzing image references**\nGemini is reading the uploaded design and extracting layout and visual details.\n' });
+  try {
+    const result: any = await ai.models.generateContent({
+      model: PLANNER_MODEL,
+      contents: [{
+        role: 'user',
+        parts: [
+          ...parts,
+          { text: 'Analyze these reference images for a website/app build. Describe page structure, visual hierarchy, layout/grid, spacing, typography, palette, components, imagery, visible labels and controls, and any interaction that can reasonably be inferred. Separate directly visible facts from inferences. Provide a detailed implementation brief. Do not invent unseen backend functionality.' }
+        ]
+      }]
+    });
+    return String(result?.text || '').trim() || 'Gemini returned no image analysis.';
+  } catch (err: any) {
+    return `Image analysis failed: ${String(err?.message || err).slice(0, 240)}. Ask the user for a smaller screenshot; do not claim it was analyzed.`;
   }
-  return false;
+}
+
+async function analyzeBuildVideoReferences(
+  attachments: AttachmentInput[],
+  emit: (event: JobEvent) => void
+): Promise<string> {
+  const videos = (attachments || []).filter((a) => String(a?.mimeType || '').startsWith('video/'));
+  if (!videos.length) return '';
+  if (!getGeminiApiKey()) return 'Video analysis unavailable: GEMINI_API_KEY is not configured. Ask the user for key screenshots instead.';
+  const ai = getGenAIClient();
+  const summaries: string[] = [];
+  for (const [index, video] of videos.slice(0, 2).entries()) {
+    const buffer = Buffer.from(stripDataUrlPrefix(String(video.data || '')), 'base64');
+    if (!buffer.length) continue;
+    if (buffer.length > 20 * 1024 * 1024) {
+      summaries.push(`${video.name || `Video ${index + 1}`}: larger than 20 MB. Ask the user for a compressed/shorter clip or 5-10 key screenshots.`);
+      continue;
+    }
+    const ext = /webm/i.test(video.mimeType) ? '.webm' : /quicktime/i.test(video.mimeType) ? '.mov' : '.mp4';
+    const tempPath = path.join(os.tmpdir(), `aib-video-${Date.now()}-${index}${ext}`);
+    fs.writeFileSync(tempPath, buffer);
+    let uploaded: any = null;
+    try {
+      uploaded = await (ai.files as any).upload({
+        file: tempPath,
+        config: { mimeType: video.mimeType, displayName: video.name || `reference-${index + 1}` }
+      });
+      const fileName = uploaded?.name || uploaded?.file?.name;
+      let fileInfo = uploaded?.file || uploaded;
+      // Video processing is asynchronous in Gemini Files API.
+      for (let poll = 0; poll < 45 && String(fileInfo?.state || '').toUpperCase() === 'PROCESSING'; poll++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        fileInfo = await (ai.files as any).get({ name: fileName });
+      }
+      if (String(fileInfo?.state || '').toUpperCase() === 'FAILED') throw new Error('Gemini could not process this video file.');
+      const uri = fileInfo?.uri || uploaded?.uri;
+      if (!uri) throw new Error('Gemini Files API did not return a video URI.');
+      const result: any = await ai.models.generateContent({
+        model: PLANNER_MODEL,
+        contents: [{
+          role: 'user',
+          parts: [
+            { fileData: { fileUri: uri, mimeType: video.mimeType } },
+            { text: 'Analyze this reference video for a web/app build. Describe the visible pages and their sequence, layout regions, navigation, typography, colors, spacing, cards, buttons, forms, animations, transitions, interactions, responsive clues and readable text. Separate observed facts from inferences. Return a concise but detailed implementation specification. Do not invent unseen features.' }
+          ]
+        }]
+      });
+      const summary = String(result?.text || '').trim();
+      summaries.push(summary
+        ? `VIDEO REFERENCE ${index + 1} (${video.name || 'uploaded video'}):\n${summary}`
+        : `${video.name || `Video ${index + 1}`}: Gemini returned no video analysis.`);
+    } catch (err: any) {
+      summaries.push(`${video.name || `Video ${index + 1}`}: analysis failed — ${String(err?.message || err).slice(0, 240)}. Ask the user for screenshots or a shorter clip; do not claim it was analyzed.`);
+    } finally {
+      try { if (uploaded?.name) await (ai.files as any).delete({ name: uploaded.name }); } catch { /* best-effort cleanup */ }
+      try { fs.rmSync(tempPath, { force: true }); } catch { /* ignore */ }
+    }
+  }
+  emit({ type: 'thought', text: '\n**Video reference analysis complete**\nGemini has prepared visual notes for the selected coding model.\n' });
+  return summaries.join('\n\n');
 }
 
 async function runAgentJob(
@@ -1490,6 +1660,34 @@ async function runAgentJob(
     if (last.role === 'user') last.text += `\n\n[Gemini planner instructions for the selected executor]\n${plan.instructions}\nQuality checklist: ${(plan.qualityChecklist || []).join('; ')}`;
   }
 
+  // Gemini inspects uploaded videos before the selected coding model executes the build.
+  const currentAttachments = Array.isArray(params.attachments) && params.attachments.length
+    ? params.attachments
+    : rawMessages[rawMessages.length - 1]?.attachments || [];
+  const latestAttachments = currentAttachments.length
+    ? currentAttachments
+    : rawMessages.flatMap((message: any) => Array.isArray(message.attachments) ? message.attachments : []);
+  if (latestAttachments.some((a: any) => String(a?.mimeType || '').startsWith('image/'))) {
+    const imageBrief = await analyzeBuildImageReferences(latestAttachments, (ev) => emitJobEvent(job, ev));
+    const last = conversation[conversation.length - 1];
+    if (last?.role === 'user') last.text += `\n\n[Gemini image understanding — visual implementation reference]\n${imageBrief}`;
+    // Non-vision NVIDIA executors receive the visual specification instead of silently dropping images.
+    const nvidiaCanSeeImages = isNvidia && /vision|vl|vlm|omni|cosmos|neva|llama-3\.2-90b|gemma-3|gemma-4|pixtral/i.test(modelName);
+    if (isNvidia && !nvidiaCanSeeImages) {
+      for (const message of conversation) message.attachments = (message.attachments || []).filter((a: any) => !String(a?.mimeType || '').startsWith('image/'));
+    }
+  }
+
+  if (latestAttachments.some((a: any) => String(a?.mimeType || '').startsWith('video/'))) {
+    emitJobEvent(job, { type: 'thought', text: '\n**Analyzing uploaded video**\nGemini is extracting page structure, visual styling and interactions.\n' });
+    const videoBrief = await analyzeBuildVideoReferences(latestAttachments, (ev) => emitJobEvent(job, ev));
+    const last = conversation[conversation.length - 1];
+    if (last?.role === 'user') {
+      last.text += `\n\n[Gemini video understanding — implementation reference]\n${videoBrief || 'No visual details could be extracted. Ask the user for screenshots or a shorter clip.'}`;
+      for (const message of conversation) message.attachments = (message.attachments || []).filter((a: any) => !String(a?.mimeType || '').startsWith('video/'));
+    }
+  }
+
   const firstUserPrompt = String(
     rawMessages.find((m) => m.role === 'user')?.text || rawMessages[0]?.text || ''
   );
@@ -1498,6 +1696,7 @@ async function runAgentJob(
   const isPureQuestion = LooksLikeQuestionOnly(lastUserPrompt, hadFilesInitially);
 
   let totalFilesWrittenInJob = 0;
+  let autoFixRounds = 0;
   let totalFilesDeletedInJob = 0;
   let cumulativeReplyText = '';
   let thoughtAccum = '';
@@ -1560,6 +1759,37 @@ async function runAgentJob(
 
       parser.finish();
 
+      // Build Mode can request real raster assets with <generate_image>.
+      const buildImageRegex = /<generate_image(?:\s+aspect_ratio\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+)))?\s*>([\s\S]*?)<\/generate_image>/gi;
+      const buildImageMatches = [...turnRawText.matchAll(buildImageRegex)];
+      let generatedBuildAssets: string[] = [];
+      for (const imageMatch of buildImageMatches) {
+        const ratio = String(imageMatch[1] || imageMatch[2] || imageMatch[3] || '16:9');
+        const imagePrompt = String(imageMatch[4] || '').trim();
+        if (!imagePrompt) continue;
+        try {
+          emitJobEvent(job, { type: 'thought', text: `\n**Generating website image asset**\nCreating a ${ratio} raster image for the project.\n` });
+          const generated = await generateGeminiImage(imagePrompt, ratio, undefined, 'gemini');
+          const dataMatch = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/.exec(String(generated.url || ''));
+          if (!dataMatch) throw new Error('Image provider did not return an embeddable raster image.');
+          const assetPath = `public/assets/generated-${Date.now()}-${generatedBuildAssets.length + 1}.png`;
+          const marker = `__AIB_BINARY_BASE64__:${dataMatch[2]}`;
+          job.files[assetPath] = marker;
+          writeTempFile(job.tempDir, assetPath, marker);
+          generatedBuildAssets.push(assetPath);
+          emitJobEvent(job, { type: 'file', path: assetPath, op: 'write', stage: 'start' });
+          emitJobEvent(job, { type: 'file', path: assetPath, op: 'write', stage: 'done' });
+          emitJobEvent(job, { type: 'thought', text: `\n**Image asset ready**\nSaved ${assetPath} using ${generated.model}.\n` });
+        } catch (imageErr: any) {
+          emitJobEvent(job, { type: 'error', message: `Website image generation failed: ${String(imageErr?.message || imageErr).slice(0, 300)}` });
+        }
+      }
+      if (buildImageMatches.length) {
+        parser.replyText = parser.replyText.replace(buildImageRegex, '').trim();
+        turnRawText = turnRawText.replace(buildImageRegex, '').trim();
+      }
+
+
       // Fallback: if a reasoning model accidentally placed <file path="..."> tags inside its thought stream
       if (parser.writtenFiles.length === 0 && /<file\s+path\s*=/i.test(turnThought)) {
         const fallbackParser = new TagStreamParser(
@@ -1588,6 +1818,18 @@ async function runAgentJob(
         role: 'model',
         text: turnRawText || '(empty response)',
       });
+
+      // A focused clarification is a valid stopping point: do not force the model to
+      // scaffold files while it is waiting for a provider/API/database decision.
+      const clarificationRequested =
+        parser.writtenFiles.length === 0 &&
+        parser.runCommands.length === 0 &&
+        /\?/.test(parser.replyText) &&
+        /\b(which|what|please share|please provide|could you|do you prefer|select|choose|api base url|payment provider|database provider|authentication provider|sandbox credentials)\b/i.test(parser.replyText);
+      if (clarificationRequested) {
+        emitJobEvent(job, { type: 'thought', text: '\n**Waiting for your clarification**\nThe agent has paused provider-specific implementation until you answer.\n' });
+        break;
+      }
 
       // Check if model returned nothing after thinking
       if (
@@ -1660,7 +1902,15 @@ async function runAgentJob(
         continue;
       }
 
-      // 2. Auto-recovery nudge: A file was cut off by token limit
+if (generatedBuildAssets.length > 0 && turn < MAX_TURNS - 1) {
+        conversation.push({
+          role: 'user',
+          text: `Gemini generated these real raster assets for this project: ${generatedBuildAssets.join(', ')}. Use these exact local asset paths where relevant, finish the requested UI, and do not generate duplicates.`
+        });
+        continue;
+      }
+
+            // 2. Auto-recovery nudge: A file was cut off by token limit
       if (parser.unclosedFile && turn < MAX_TURNS - 1) {
         conversation.push({
           role: 'user',
@@ -1737,12 +1987,16 @@ async function runAgentJob(
           ok: checkRes.ok,
         });
 
-        if (!checkRes.ok && turn < MAX_TURNS - 1) {
+        if (!checkRes.ok && autoFixRounds < 3 && turn < MAX_TURNS - 1) {
+          autoFixRounds += 1;
+          emitJobEvent(job, { type: 'thought', text: `\n**Auto-fixing round ${autoFixRounds}/3**\n${checkRes.output.slice(0, 900)}\n` });
           conversation.push({
             role: 'user',
-            text: `The automatic "$ check code (esbuild)" check reported errors:\n\n${checkRes.output}\n\nFix every error by rewriting only the affected file(s) in full using <file path="...">...</file> tags, and finish with a short reply.`,
+            text: `Auto-fix round ${autoFixRounds}/3. The server syntax check reported these exact errors:\n\n${checkRes.output}\n\nFix every error by rewriting only affected file(s) completely using <file path="...">...</file> tags. Preserve all features. Then wait for the server to re-check.`,
           });
           continue;
+        } else if (!checkRes.ok) {
+          emitJobEvent(job, { type: 'error', message: `Automatic syntax repair limit reached (3 rounds). Retry after reviewing these errors:\n${checkRes.output}` });
         }
       }
 
@@ -1879,19 +2133,31 @@ function loadChatSkillsPrompt(): string {
   const skillsMdPath = path.join(process.cwd(), 'skills.md');
   let skillsContent = '';
   try {
-    if (fs.existsSync(skillsMdPath)) {
-      skillsContent = fs.readFileSync(skillsMdPath, 'utf8');
+    if (fs.existsSync(skillsMdPath)) skillsContent = fs.readFileSync(skillsMdPath, 'utf8');
+  } catch { skillsContent = ''; }
+  // Load every installed skill for Chat Mode too, so all models/modes share the same skill library.
+  const skillDir = path.join(process.cwd(), 'skills');
+  const folderSkills: string[] = [];
+  try {
+    if (fs.existsSync(skillDir)) {
+      for (const entry of fs.readdirSync(skillDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const skillPath = path.join(skillDir, entry.name, 'SKILL.md');
+        if (!fs.existsSync(skillPath)) continue;
+        try {
+          const raw = fs.readFileSync(skillPath, 'utf8').replace(/^---[\s\S]*?---\s*/, '').trim();
+          if (raw) folderSkills.push(`[SKILL: ${entry.name}]\n${raw}`);
+        } catch { /* continue loading remaining skills */ }
+      }
     }
-  } catch {
-    skillsContent = '';
-  }
+  } catch { /* skills.md remains a safe fallback */ }
+  return `You are a highly capable multimodal Gemini AI Assistant in Chat Mode. Use the user's language. Do not reveal hidden chain-of-thought; provide concise user-visible plans and explanations.
 
-  return `You are a highly intelligent, thinking-enabled multimodal Gemini AI Assistant in Chat Mode (thinking_enabled = true).
-Always think carefully step by step before answering. Start each phase of your thinking with a **Bold Heading** (e.g., **Analyzing Request & Selecting Skill**, **Solving Step by Step**, **Verifying Accuracy**).
+Follow skills.md and every installed skill below:
 
-Follow all instructions and skills in skills.md below:
+${skillsContent}
 
-${skillsContent}`;
+# INSTALLED SKILLS\n\n${folderSkills.join('\n\n')}`;
 }
 
 function normalizeGeminiChatModel(rawModel?: string): string {
