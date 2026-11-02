@@ -5,7 +5,7 @@ A web application where you describe an app and an AI model (Google Gemini or NV
 - **Live Thinking**: Real-time thought stream with live updating bold headings.
 - **Live Code**: Watch files get created, updated, and syntax-checked with `esbuild` in real time.
 - **Interactive Preview**: Sandboxed browser preview with safe link/form handling, live console capture, bounded automatic runtime repair, and a real isolated Vite dev server for Vite projects.
-- **Independent Model Routing**: Select a Gemini Planner separately from the Gemini/NVIDIA Run model in Build Mode and Chat Mode. NVIDIA executor calls require `NVIDIA_API_KEY`; availability and pricing depend on the provider account.
+- **Independent Model Routing**: Select a Planner separately from the Run model in both Build Mode and Chat Mode. Planner choices include Gemini plus chat-capable NVIDIA Nemotron and DeepSeek models; Run choices include Gemini and available NVIDIA NIM models. NVIDIA Planner and executor calls require `NVIDIA_API_KEY`; availability and pricing depend on the provider account.
 - **Built-in Terminal & Console**: Captures `console.log/info/warn/error`, uncaught runtime errors, unhandled promise rejections, and server terminal command output. Runtime errors can trigger up to two automatic repair rounds per user request.
 - **One-Click ZIP Export**: Downloads all project files along with a standalone runnable `index.html`.
 
@@ -81,5 +81,10 @@ New-project instructions now prioritize immediate browser preview and avoid unre
 
 - Build Mode and Chat Mode both have separate Planner and Run model selections.
 - Planner options are Gemini 3.8 Flash and Gemini 3.5 Flash. The current planner implementation uses the Gemini API.
-- Run model options include Gemini and the available Nemotron/DeepSeek NVIDIA NIM catalog entries. NVIDIA execution requires `NVIDIA_API_KEY` on the server. A provider model being listed does not guarantee free-tier access or account entitlement.
+- Planner and Run model options are independently selectable in Chat and Build modes. Planner includes Gemini plus Nemotron and DeepSeek; Run includes Gemini and the available NVIDIA NIM catalog entries. NVIDIA Planner and execution require `NVIDIA_API_KEY` on the server. A provider model being listed does not guarantee free-tier access or account entitlement.
 - Vite projects are previewed using an isolated temporary workspace and a real Vite dev server. Dependency installation and server startup errors are shown in the Preview panel. Plain browser-ready projects continue to use the instant sandbox preview.
+
+
+### NVIDIA Planner models
+
+The Planner picker includes the chat-capable Nemotron and DeepSeek models returned by the NVIDIA model catalog, plus safe fallback IDs when the catalog is unavailable. DeepSeek V4.1 Flash is listed with a free NVIDIA endpoint; DeepSeek V4 Flash may require partner or self-hosted access and can fail on the serverless endpoint depending on account/model availability. Model listing does not guarantee entitlement.

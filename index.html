@@ -1758,10 +1758,11 @@ ${combinedCss}
         const q = search.trim().toLowerCase();
         const matchesSearch = (id) => !q || id.toLowerCase().includes(q);
 
-        const favList = favorites.filter(matchesSearch).filter((id) => selectionTarget !== 'planner' || (!id.startsWith('nvidia:') && !id.includes('/')));
+        const favList = favorites.filter(matchesSearch);
         const filteredGemini = geminiList.filter(matchesSearch);
 
         const filteredNvidiaAll = nvidiaFullList.filter(matchesSearch);
+        const plannerNvidiaList = filteredNvidiaAll.filter((id) => /nemotron|deepseek/i.test(id));
         const familyFilter = (id) => familyTab === 'All' || (familyTab === 'Gemini' && !id.startsWith('nvidia:')) || (familyTab === 'DeepSeek' && /deepseek/i.test(id)) || (familyTab === 'Nemotron' && /nemotron/i.test(id)) || (familyTab === 'NVIDIA' && id.startsWith('nvidia:') && !/deepseek|nemotron/i.test(id));
         const filteredNvidiaDefault = filteredNvidiaAll.filter(
           (id) => DEFAULT_NVIDIA_FILTER_REGEX.test(id) || favorites.includes(id)
@@ -1810,11 +1811,11 @@ ${combinedCss}
             <div className="sheet-panel" onClick={(e) => e.stopPropagation()}>
               <div className="grab-handle" />
               <div style={{ display: 'flex', gap: 8, padding: '8px 16px 12px' }}>
-                <button type="button" className="btn" style={{ flex: 1, borderColor: selectionTarget === 'planner' ? '#8b5cf6' : '#333', background: selectionTarget === 'planner' ? '#30204a' : '#18181b' }} onClick={() => { onTargetChange('planner'); setFamilyTab('Gemini'); }}>Planner Model</button>
+                <button type="button" className="btn" style={{ flex: 1, borderColor: selectionTarget === 'planner' ? '#8b5cf6' : '#333', background: selectionTarget === 'planner' ? '#30204a' : '#18181b' }} onClick={() => { onTargetChange('planner'); setFamilyTab('All'); }}>Planner Model</button>
                 <button type="button" className="btn" style={{ flex: 1, borderColor: selectionTarget === 'run' ? '#8b5cf6' : '#333', background: selectionTarget === 'run' ? '#30204a' : '#18181b' }} onClick={() => { onTargetChange('run'); setFamilyTab('All'); }}>Run Model</button>
               </div>
               <div style={{ display: 'flex', gap: 6, padding: '0 16px 10px', flexWrap: 'wrap' }}>
-                {(selectionTarget === 'planner' ? ['Gemini'] : ['All','Gemini','Nemotron','DeepSeek','NVIDIA']).map(tab => <button key={tab} type="button" className="btn" style={{ minHeight: 30, padding: '0 10px', fontSize: 11, borderColor: familyTab === tab ? '#8b5cf6' : '#333', background: familyTab === tab ? '#30204a' : '#18181b' }} onClick={() => setFamilyTab(tab)}>{tab}</button>)}
+                {(selectionTarget === 'planner' ? ['All','Gemini','Nemotron','DeepSeek'] : ['All','Gemini','Nemotron','DeepSeek','NVIDIA']).map(tab => <button key={tab} type="button" className="btn" style={{ minHeight: 30, padding: '0 10px', fontSize: 11, borderColor: familyTab === tab ? '#8b5cf6' : '#333', background: familyTab === tab ? '#30204a' : '#18181b' }} onClick={() => setFamilyTab(tab)}>{tab}</button>)}
               </div>
               <input
                 type="text"
@@ -1839,9 +1840,9 @@ ${combinedCss}
                   </div>
                 )}
 
-                {selectionTarget !== 'planner' && <div>
-                  <div className="model-group-title">NVIDIA / Hosted Models</div>
-                  {displayedNvidia.filter(familyFilter).map(renderModelRow)}
+                {<div>
+                  <div className="model-group-title">{selectionTarget === 'planner' ? 'Nemotron & DeepSeek Planner Models' : 'NVIDIA / Hosted Models'}</div>
+                  {(selectionTarget === 'planner' ? plannerNvidiaList : displayedNvidia).filter(familyFilter).map(renderModelRow)}
                   {!showAllNvidia && !q && filteredNvidiaAll.length > filteredNvidiaDefault.length && (
                     <button
                       type="button"
@@ -1853,7 +1854,7 @@ ${combinedCss}
                     </button>
                   )}
                 </div>}
-                {selectionTarget === 'planner' && <div style={{ color: '#999', fontSize: 12, padding: 12 }}>Planner currently uses Gemini models. Select a separate executor in the Run Model tab.</div>}
+                {selectionTarget === 'planner' && <div style={{ color: '#999', fontSize: 12, padding: 12 }}>Planner supports Gemini plus chat-capable Nemotron and DeepSeek models. NVIDIA Planner requires NVIDIA_API_KEY. DeepSeek V4 Flash may require partner/self-hosted access; V4.1 Flash currently has a listed NVIDIA free endpoint.</div>}
               </div>
             </div>
           </div>
@@ -3126,7 +3127,7 @@ ${combinedCss}
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <button type="button" className="btn" onClick={() => { setModelSelectionTarget('run'); setModelSheetOpen(true); }}>✦ Run: {currentModelShort} ⌄</button>
-                          <button type="button" className="btn" onClick={() => { setModelSelectionTarget('planner'); setModelSheetOpen(true); }}>Planner: {plannerModel.replace('gemini-', 'Gemini ')} ⌄</button>
+                          <button type="button" className="btn" onClick={() => { setModelSelectionTarget('planner'); setModelSheetOpen(true); }}>Planner: {String(plannerModel).startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : plannerModel.replace('gemini-', 'Gemini ')} ⌄</button>
                           <button
                             type="button"
                             className="btn btn-icon"
@@ -5172,7 +5173,7 @@ ${codeText}`;
               </button>
 
               <div style={{display:'flex',gap:6,alignItems:'center',minWidth:0,overflowX:'auto'}}>
-                <button type="button" className="cm-btn" style={{whiteSpace:'nowrap'}} onClick={()=>{setChatModelTarget('planner');setChatModelSheetOpen(true);}}>Planner · {String(plannerModel || 'gemini-3.8-flash').replace('gemini-','Gemini ')} ⌄</button>
+                <button type="button" className="cm-btn" style={{whiteSpace:'nowrap'}} onClick={()=>{setChatModelTarget('planner');setChatModelSheetOpen(true);}}>Planner · {String(plannerModel || 'gemini-3.8-flash').startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : String(plannerModel || 'gemini-3.8-flash').replace('gemini-','Gemini ')} ⌄</button>
                 <button type="button" className="cm-btn" style={{whiteSpace:'nowrap'}} onClick={()=>{setChatModelTarget('run');setChatModelSheetOpen(true);}}>Run · {String(chatRunModel).startsWith('nvidia:') ? String(chatRunModel).slice(7).split('/').pop() : String(chatRunModel).replace('gemini-','Gemini ')} ⌄</button>
               </div>
               <button

@@ -130,23 +130,69 @@ function localPlan(prompt: string, mode: 'chat' | 'build') {
   const type = image ? (edit ? 'edit_image' : 'image') : mode === 'build' ? (codeChange ? 'code_change' : 'code_new') : codeChange ? 'code_fix' : 'task_or_question';
   return { type, goal: p.slice(0, 240), steps: ['Understand the request and existing context', 'Choose the smallest reliable implementation', 'Verify the result and report limitations'], qualityChecklist: ['Preserve existing features and design', 'Handle errors and missing inputs', 'Verify before claiming success'], executor: image ? 'image_model' : 'selected_model', instructions: `Carry out this request faithfully: ${p}. Preserve existing functionality and verify your result.`, filesToTouch: [], risks: [], image: image ? { aspectRatio: /9:16|portrait|reel|story/i.test(p) ? '9:16' : /1:1|logo|avatar|icon/i.test(p) ? '1:1' : '16:9', category: /thumbnail|poster/i.test(p) ? 'poster_or_text' : 'illustration', needsText: /thumbnail|poster|text|logo/i.test(p), howToGenerate: 'मुख्य विषय, composition और style स्पष्ट रखें।', components: [], style: 'high quality, detailed', lighting: 'cinematic', palette: ['navy', 'cyan', 'white'], camera: 'clear focal point', prompt: p, modelOrder: [] } : null };
 }
+const PLANNER_INSTRUCTIONS = (prompt: string) => `You are the lead architect and planner for an AI coding assistant. Return ONLY valid JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For non-image builds, instructions MUST be a detailed executor-ready implementation brief covering project inspection, architecture, pages/components, responsive behavior, data model, API contracts, dependencies, integration prerequisites, security, edge cases and exact verification commands. For integrations (payment/database/auth/third-party API), identify provider, official docs, API base URL, auth method, required env var NAMES, schemas, webhook needs, sandbox and test plan; if essential info is missing, tell executor to ask one focused question and wait for the answer before implementing provider-specific code. Do not ask about details that can safely use sensible defaults. Require the full planner brief to be forwarded unchanged with the original user message to the selected executor model. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`;
+
 async function createGeminiPlan(prompt: string, mode: 'chat' | 'build', plannerModel = PLANNER_MODEL) {
   const fallback = localPlan(prompt, mode);
   if (!prompt.trim() || /^(hi|hello|hey|thanks|thank you|ok|okay)\W*$/i.test(prompt.trim()) || prompt.trim().split(/\s+/).length < 2) return null;
-  if (!getGeminiApiKey()) return fallback;
-  const timer = new AbortController();
-  const timeout = setTimeout(() => timer.abort(), 10000);
+
+  const isNvidiaPlanner = String(plannerModel).startsWith('nvidia:');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
   try {
-    const ai = getGenAIClient();
-    const result: any = await Promise.race([
-      ai.models.generateContent({ model: plannerModel, contents: `You are Gemini, the lead architect and planner. Return ONLY valid JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For non-image builds, instructions MUST be a detailed executor-ready implementation brief covering project inspection, architecture, pages/components, responsive behavior, data model, API contracts, dependencies, integration prerequisites, security, edge cases and exact verification commands. For integrations (payment/database/auth/third-party API), identify provider, official docs, API base URL, auth method, required env var NAMES, schemas, webhook needs, sandbox and test plan; if essential info is missing, tell executor to ask one focused question and wait for the answer before implementing provider-specific code. Do not ask about details that can safely use sensible defaults. Require Gemini's full brief to be forwarded unchanged with the original user message to the selected executor model. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any }),
-      new Promise((_, reject) => timer.signal.addEventListener('abort', () => reject(new Error('Planner timeout')), { once: true }))
-    ]);
-    const raw = result?.text || result?.candidates?.[0]?.content?.parts?.map((x: any) => x.text || '').join('') || '';
+    let raw = '';
+    if (isNvidiaPlanner) {
+      const key = getNvidiaApiKey();
+      if (!key || key === 'MY_NVIDIA_API_KEY' || key === 'MISSING_KEY') {
+        throw new Error('NVIDIA_API_KEY is required for the selected NVIDIA Planner model.');
+      }
+      const modelId = String(plannerModel).slice(7);
+      const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [
+            { role: 'system', content: 'You are a precise planning model. Return valid JSON only. Do not use markdown fences.' },
+            { role: 'user', content: PLANNER_INSTRUCTIONS(prompt) },
+          ],
+          temperature: 0.2,
+          max_tokens: 5000,
+          response_format: { type: 'json_object' },
+          stream: false,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const detail = (await response.text()).slice(0, 500);
+        throw new Error(`NVIDIA Planner ${modelId} failed (HTTP ${response.status}): ${detail}`);
+      }
+      const payload: any = await response.json();
+      raw = String(payload?.choices?.[0]?.message?.content || '');
+      if (!raw) throw new Error(`NVIDIA Planner ${modelId} returned an empty response.`);
+    } else {
+      const key = getGeminiApiKey();
+      if (!key || key === 'MY_GEMINI_API_KEY' || key === 'MISSING_KEY') return fallback;
+      const ai = getGenAIClient();
+      const result: any = await ai.models.generateContent({
+        model: plannerModel,
+        contents: PLANNER_INSTRUCTIONS(prompt),
+        config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any,
+      });
+      raw = result?.text || result?.candidates?.[0]?.content?.parts?.map((x: any) => x.text || '').join('') || '';
+    }
     const parsed = JSON.parse(String(raw).replace(/^```(?:json)?|```$/g, '').trim());
-    if (!['image','edit_image','code_new','code_change','code_fix','task_or_question'].includes(parsed.type)) return fallback;
+    if (!['image','edit_image','code_new','code_change','code_fix','task_or_question'].includes(parsed.type)) {
+      if (isNvidiaPlanner) throw new Error('Selected NVIDIA Planner returned invalid plan JSON.');
+      return fallback;
+    }
     return { ...fallback, ...parsed, steps: Array.isArray(parsed.steps) ? parsed.steps : fallback.steps, qualityChecklist: Array.isArray(parsed.qualityChecklist) ? parsed.qualityChecklist : fallback.qualityChecklist };
-  } catch { return fallback; } finally { clearTimeout(timeout); }
+  } catch (error: any) {
+    if (isNvidiaPlanner) throw error;
+    return fallback;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function maskKey(key?: string): string {
@@ -232,6 +278,7 @@ const FALLBACK_NVIDIA_MODELS = [
   'google/diffusiongemma-26b-a4b-it',
   'meta/muse-glimmer-30b',
   'deepseek-ai/deepseek-v4.1-flash',
+  'deepseek-ai/deepseek-v4-flash',
   'nvidia/nemotron-3-ultra-550b-a55b',
   'nvidia/nemotron-3-super-120b-a12b',
   'google/gemma-4-31b-it',
@@ -2997,18 +3044,23 @@ app.post('/api/chat/stream', async (req, res) => {
 
   try {
     const { model, plannerModel, messages, attachments, aspectRatio, forceImage, imageModel } = req.body || {};
-    const apiKey = getGeminiApiKey();
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'MISSING_KEY') {
-      throw new Error(
-        `Invalid or missing GEMINI_API_KEY (${maskKey(apiKey)}). Please check your Gemini API configuration.`
-      );
+    const requestedModel = normalizeChatModel(model);
+    if (requestedModel.startsWith('nvidia:')) {
+      const nvidiaKey = getNvidiaApiKey();
+      if (!nvidiaKey || nvidiaKey === 'MY_NVIDIA_API_KEY' || nvidiaKey === 'MISSING_KEY') {
+        throw new Error('NVIDIA_API_KEY is required for the selected NVIDIA Run model.');
+      }
+    } else {
+      const apiKey = getGeminiApiKey();
+      if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'MISSING_KEY') {
+        throw new Error(`Invalid or missing GEMINI_API_KEY (${maskKey(apiKey)}). Please check your Gemini API configuration.`);
+      }
     }
 
-    const requestedModel = normalizeChatModel(model);
     const rawMessages = Array.isArray(messages) ? messages : [];
     const lastMsg = rawMessages[rawMessages.length - 1];
     const lastUserText = String(lastMsg?.text || '').trim();
-    const selectedPlanner = String(plannerModel || PLANNER_MODEL).startsWith('nvidia:') ? PLANNER_MODEL : String(plannerModel || PLANNER_MODEL);
+    const selectedPlanner = String(plannerModel || PLANNER_MODEL);
     const plan = await createGeminiPlan(lastUserText, 'chat', selectedPlanner);
     const systemInstruction = `${loadChatSkillsPrompt()}\n\nGemini planner brief: ${plan?.instructions || 'Use your own judgment.'}\nQuality checklist: ${(plan?.qualityChecklist || []).join('; ')}`;
     if (plan) sendEvent({ type: 'plan', plan });
