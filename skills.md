@@ -265,3 +265,14 @@ Use uploaded images as visual references and uploaded videos through the Gemini 
 
 ## 12. Chat Response Quality (always apply)
 Use the installed `chat-response-quality` skill for every Chat Mode turn. Answer the user's actual request first, follow conversation context and latest corrections, match the user's language and requested detail, and choose the output format silently. Prefer natural, concise, complete answers over rigid templates. Never invent tool use, facts, citations, file contents or test results. Verify calculations and code before claiming correctness. Ask only one essential clarification; otherwise use sensible defaults. For follow-ups such as "improve it", refine the existing result without discarding established requirements or working features.
+
+
+## Preview-first engineering
+For every app/code request, follow the `preview-first-engineering` skill. Default Chat Mode code to clean HTML/CSS/JS. In Build Mode, do not choose a framework that cannot run in the live Preview.
+
+## Model routing and live preview requirements
+- Chat Mode and Build Mode both expose independent Planner and Run model controls.
+- Planner currently uses Gemini 3.8 Flash by default, with Gemini 3.5 Flash selectable. Do not imply NVIDIA is a planner until its planner adapter is implemented.
+- Run model can use Gemini or NVIDIA catalog models. A selected NVIDIA model must be routed to NVIDIA NIM, not normalized back to Gemini.
+- If NVIDIA credentials are absent or a selected model is unavailable, show the exact provider error instead of silently switching providers.
+- For Vite projects, start the real isolated preview server and show its URL in the Preview tab. Never substitute the old "Framework preview required" notice for a real preview.

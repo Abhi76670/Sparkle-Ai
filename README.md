@@ -4,7 +4,8 @@ A web application where you describe an app and an AI model (Google Gemini or NV
 
 - **Live Thinking**: Real-time thought stream with live updating bold headings.
 - **Live Code**: Watch files get created, updated, and syntax-checked with `esbuild` in real time.
-- **Interactive Preview**: Sandboxed browser preview with safe link/form handling, live console capture, and bounded automatic runtime repair.
+- **Interactive Preview**: Sandboxed browser preview with safe link/form handling, live console capture, bounded automatic runtime repair, and a real isolated Vite dev server for Vite projects.
+- **Independent Model Routing**: Select a Gemini Planner separately from the Gemini/NVIDIA Run model in Build Mode and Chat Mode. NVIDIA executor calls require `NVIDIA_API_KEY`; availability and pricing depend on the provider account.
 - **Built-in Terminal & Console**: Captures `console.log/info/warn/error`, uncaught runtime errors, unhandled promise rejections, and server terminal command output. Runtime errors can trigger up to two automatic repair rounds per user request.
 - **One-Click ZIP Export**: Downloads all project files along with a standalone runnable `index.html`.
 
@@ -48,3 +49,37 @@ The server checks generated JavaScript/JSX with esbuild. A syntax pass is not pr
 ## Chat Mode response quality
 
 Chat Mode now loads a dedicated `chat-response-quality` skill alongside the existing skill library. It improves intent recognition, language matching, response structure, accuracy checks, clarification behavior, conversation continuity and honest reporting. It selects concise or detailed output based on the request instead of forcing every answer into the same template.
+
+## Reliability and Chat Mode improvements (2026-11-02)
+
+- Reference-image edits now pass the uploaded image bytes to Gemini's image model. Edit requests preserve the original subject and only apply the requested change; reference-image edits do not silently fall back to text-only NVIDIA generation.
+- Build Mode now has an explicit dependency-recovery workflow. An `ERESOLVE` install failure receives one bounded automatic `npm install --legacy-peer-deps` retry; other install errors are returned to the coding agent with instructions to diagnose, correct package versions and retry.
+- Chat Mode now defaults to complete, self-contained HTML/CSS/JS with a white/light design unless the user asks otherwise. It distinguishes simple runnable prototypes from larger projects where Build Mode is recommended.
+- Chat code previews now offer a full-screen code view, a full-screen live preview and a “Fix this code with Gemini” action when the preview reports a runtime error.
+- Build Mode's app preview can expand to the full viewport, hiding terminal chrome while expanded.
+- Added skills: `reference-image-editing`, `dependency-recovery`, `chat-runtime-verification`, and `fullscreen-preview`.
+
+### Verification notes
+
+The updated server TypeScript and the main React/Babel JSX script both passed syntax transpilation checks. A full dependency installation was attempted but did not finish within the available test window, so a full Vite production build and live Gemini/image-edit API test remain unverified. Configure the required server-side Gemini/NVIDIA environment variables before running the application.
+
+The root `index.html` is kept in sync with `public/index.html` so `npm run build` builds the actual application shell rather than the previous empty React entry. Vite's `publicDir` is disabled to prevent a duplicate public index from overwriting the root build entry.
+
+
+## Preview-first update
+New-project instructions now prioritize immediate browser preview and avoid unrequested Vite/Next/TypeScript frameworks. Model picker includes All, Gemini, Nemotron, and DeepSeek family tabs. Gemini remains the default. NVIDIA endpoint availability requires a configured NVIDIA API key.
+
+## Live preview and model routing update
+
+- Build Mode now has independent Planner Model and Run Model controls. The planner selector is restricted to Gemini models because the planner endpoint uses the Google GenAI API; the Run Model selector can choose the configured Gemini/NVIDIA-hosted executor models.
+- The model picker includes All, Gemini, Nemotron, DeepSeek and NVIDIA family tabs. The actual available executor list depends on the configured NVIDIA API key/catalog response; model availability and pricing are not guaranteed by the picker.
+- Vite projects now start an isolated preview workspace. Dependencies are installed with lifecycle scripts disabled; ERESOLVE gets one `--legacy-peer-deps` retry. Vite starts on loopback and is exposed at a same-origin `/preview/...` URL. The UI waits for HTTP readiness and shows the real startup error if it fails.
+- Plain HTML/JS and browser-ready React projects continue using the instant iframe preview. Next.js/other server frameworks are not silently treated as live Vite previews.
+- Preview sessions are replaced per project and cleaned up after 45 minutes. Preview is for development validation, not production hosting.
+
+## Model selection and previews
+
+- Build Mode and Chat Mode both have separate Planner and Run model selections.
+- Planner options are Gemini 3.8 Flash and Gemini 3.5 Flash. The current planner implementation uses the Gemini API.
+- Run model options include Gemini and the available Nemotron/DeepSeek NVIDIA NIM catalog entries. NVIDIA execution requires `NVIDIA_API_KEY` on the server. A provider model being listed does not guarantee free-tier access or account entitlement.
+- Vite projects are previewed using an isolated temporary workspace and a real Vite dev server. Dependency installation and server startup errors are shown in the Preview panel. Plain browser-ready projects continue to use the instant sandbox preview.

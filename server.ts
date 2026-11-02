@@ -2,6 +2,7 @@ import 'dotenv/config';
 import dns from 'dns';
 import net from 'net';
 import https from 'https';
+import http from 'http';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -129,7 +130,7 @@ function localPlan(prompt: string, mode: 'chat' | 'build') {
   const type = image ? (edit ? 'edit_image' : 'image') : mode === 'build' ? (codeChange ? 'code_change' : 'code_new') : codeChange ? 'code_fix' : 'task_or_question';
   return { type, goal: p.slice(0, 240), steps: ['Understand the request and existing context', 'Choose the smallest reliable implementation', 'Verify the result and report limitations'], qualityChecklist: ['Preserve existing features and design', 'Handle errors and missing inputs', 'Verify before claiming success'], executor: image ? 'image_model' : 'selected_model', instructions: `Carry out this request faithfully: ${p}. Preserve existing functionality and verify your result.`, filesToTouch: [], risks: [], image: image ? { aspectRatio: /9:16|portrait|reel|story/i.test(p) ? '9:16' : /1:1|logo|avatar|icon/i.test(p) ? '1:1' : '16:9', category: /thumbnail|poster/i.test(p) ? 'poster_or_text' : 'illustration', needsText: /thumbnail|poster|text|logo/i.test(p), howToGenerate: 'मुख्य विषय, composition और style स्पष्ट रखें।', components: [], style: 'high quality, detailed', lighting: 'cinematic', palette: ['navy', 'cyan', 'white'], camera: 'clear focal point', prompt: p, modelOrder: [] } : null };
 }
-async function createGeminiPlan(prompt: string, mode: 'chat' | 'build') {
+async function createGeminiPlan(prompt: string, mode: 'chat' | 'build', plannerModel = PLANNER_MODEL) {
   const fallback = localPlan(prompt, mode);
   if (!prompt.trim() || /^(hi|hello|hey|thanks|thank you|ok|okay)\W*$/i.test(prompt.trim()) || prompt.trim().split(/\s+/).length < 2) return null;
   if (!getGeminiApiKey()) return fallback;
@@ -138,7 +139,7 @@ async function createGeminiPlan(prompt: string, mode: 'chat' | 'build') {
   try {
     const ai = getGenAIClient();
     const result: any = await Promise.race([
-      ai.models.generateContent({ model: PLANNER_MODEL, contents: `You are Gemini, the lead architect and planner. Return ONLY valid JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For non-image builds, instructions MUST be a detailed executor-ready implementation brief covering project inspection, architecture, pages/components, responsive behavior, data model, API contracts, dependencies, integration prerequisites, security, edge cases and exact verification commands. For integrations (payment/database/auth/third-party API), identify provider, official docs, API base URL, auth method, required env var NAMES, schemas, webhook needs, sandbox and test plan; if essential info is missing, tell executor to ask one focused question and wait for the answer before implementing provider-specific code. Do not ask about details that can safely use sensible defaults. Require Gemini's full brief to be forwarded unchanged with the original user message to the selected executor model. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any }),
+      ai.models.generateContent({ model: plannerModel, contents: `You are Gemini, the lead architect and planner. Return ONLY valid JSON with keys type (image|edit_image|code_new|code_change|code_fix|task_or_question), goal, steps (3-7), qualityChecklist, executor (image_model|selected_model), instructions, filesToTouch, risks, image. For non-image builds, instructions MUST be a detailed executor-ready implementation brief covering project inspection, architecture, pages/components, responsive behavior, data model, API contracts, dependencies, integration prerequisites, security, edge cases and exact verification commands. For integrations (payment/database/auth/third-party API), identify provider, official docs, API base URL, auth method, required env var NAMES, schemas, webhook needs, sandbox and test plan; if essential info is missing, tell executor to ask one focused question and wait for the answer before implementing provider-specific code. Do not ask about details that can safely use sensible defaults. Require Gemini's full brief to be forwarded unchanged with the original user message to the selected executor model. For image, include aspectRatio, category, needsText, howToGenerate, components, style, lighting, palette, camera, prompt, modelOrder. Request: ${prompt}`, config: { thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' }, responseMimeType: 'application/json' } as any }),
       new Promise((_, reject) => timer.signal.addEventListener('abort', () => reject(new Error('Planner timeout')), { once: true }))
     ]);
     const raw = result?.text || result?.candidates?.[0]?.content?.parts?.map((x: any) => x.text || '').join('') || '';
@@ -181,7 +182,7 @@ const SKILL_NAMES = [
   'database-engineering', 'payment-gateway-integration', 'build-quality-gates',
 ];
 
-const BASE_SYSTEM_PROMPT = `You are an AI app builder inside a dashboard, with your own terminal. Inspect and preserve the project's existing framework and conventions first. For new projects, default to the browser-preview-compatible React 18 setup (no build step, no imports/exports, React/ReactDOM globals) unless the user requests a different stack or the project already uses one. In browser-preview mode, use src/App.jsx defining function App(), extra src/*.jsx components loaded alphabetically with App.jsx last, and src/styles.css. For Vite/Next/TypeScript or another explicitly requested framework, use its correct imports, entrypoints, types and package scripts instead of forcing browser-global conventions. Output format (never in markdown code fences): write or edit a file with the full content using <file path="src/App.jsx">full content</file>; delete with <delete path="src/Old.jsx"/>; run a single supported terminal command with <run>command</run> (never chain commands; use one <run> per turn); after <run> tags stop and wait for results. Everything outside tags is your reply. You are given the current project files: only write files that need to change. If the user only asks a question, answer in plain text and do not write files. Before building, inspect the existing project and think about audience, complete user journeys, architecture, data/API contracts, integrations, believable content (never lorem ipsum), responsive states and a distinctive subject-specific design. Aim for polished, production-minded web experiences: coherent visual identity, excellent typography, intentional spacing, clear hierarchy, accessible contrast, useful micro-interactions, realistic content, empty/loading/error/success states, and working controls. Do not output a generic dashboard template when the domain calls for a tailored experience. For reference images, inspect layout, hierarchy, spacing, typography, colors, components and visible interactions, then recreate the design faithfully while making it responsive. For video references, use the provided Gemini video-analysis brief and map visible page transitions, interactions and animations into an implementation spec. If a critical requirement is genuinely missing (for example payment provider, API base URL, database choice, auth mode, or required credentials), ask one concise clarification question and stop before inventing an integration; otherwise make sensible reversible defaults and proceed. If the user asks a question rather than requesting a code change, answer it directly and do not modify files. A browser-preview-mode build is complete only when src/App.jsx and src/styles.css exist; framework projects must include their actual required entrypoints and scripts. If the current preview runtime cannot execute that framework, state the exact limitation rather than showing a fake preview. For a very vague request ask one essential question before making irreversible/provider-specific choices; otherwise build a useful first version. Always finish with a short reply in the user's language; never end a turn with only files. Maintain requirements.md (create first, update when needs change) and memory.md (update after every build or edit). Apps must be responsive from 320px and keep appropriate client data in localStorage. For integrations, discover provider, official docs, API base URL, auth, schemas, sandbox and acceptance checks before implementation; ask for missing essentials rather than inventing them. Keep secrets server-side. Use the terminal and curl only with verified API contracts and safe sandbox/test operations; never trigger live charges or destructive actions without explicit authorization. The user may attach images or videos: study them and recreate the design. When a project needs a custom visual asset (hero artwork, illustration, product visual, background or logo), request a real raster image by emitting <generate_image aspect_ratio="16:9">a complete art-directed prompt</generate_image> in the main response; the server will generate it, add it to public/assets, and return the exact path for you to use. Use the generated asset in the actual page rather than leaving it unused. Never fake an image with a gradient or placeholder when a real asset was requested. A complete build also has package.json, metadata.json, README.md and a Makefile. Use only one terminal command per <run> tag; no shell chaining, pipes or redirection. Verify your files, follow the security skill, follow the edit-responsibility skill, fix every error the server reports.`;
+const BASE_SYSTEM_PROMPT = `You are an AI app builder inside a dashboard, with your own terminal. Inspect and preserve the project's existing framework and conventions first. For every NEW project, the first priority is a working instant Preview. Default to plain HTML + CSS + JavaScript (index.html, styles.css, script.js) with no framework, no npm dependencies, and no build step. If React is genuinely useful, use the browser-preview-compatible React 18 global setup (no imports/exports, React/ReactDOM globals) with src/App.jsx defining function App(), extra src/*.jsx components loaded alphabetically with App.jsx last, and src/styles.css. NEVER choose Vite, Next.js, TypeScript, React Scripts, or any framework that the built-in preview cannot execute unless the user explicitly asks for that framework. If a framework is explicitly requested, configure a real preview server and verify its preview URL before declaring completion; never show a fake 'Framework preview required' page as the app preview. Do not use a framework merely because the app has multiple screens. Output format (never in markdown code fences): write or edit a file with the full content using <file path="src/App.jsx">full content</file>; delete with <delete path="src/Old.jsx"/>; run a single supported terminal command with <run>command</run> (never chain commands; use one <run> per turn); after <run> tags stop and wait for results. Everything outside tags is your reply. You are given the current project files: only write files that need to change. If the user only asks a question, answer in plain text and do not write files. Before building, inspect the existing project and think about audience, complete user journeys, architecture, data/API contracts, integrations, believable content (never lorem ipsum), responsive states and a distinctive subject-specific design. For every new app or website, use a clean WHITE background and light theme by default unless the user explicitly requests dark mode or another palette. Aim for polished, production-minded web experiences: coherent visual identity, excellent typography, intentional spacing, clear hierarchy, accessible contrast, useful micro-interactions, realistic content, empty/loading/error/success states, and working controls. Do not output a generic dashboard template when the domain calls for a tailored experience. For reference images, inspect layout, hierarchy, spacing, typography, colors, components and visible interactions, then recreate the design faithfully while making it responsive. For video references, use the provided Gemini video-analysis brief and map visible page transitions, interactions and animations into an implementation spec. If a critical requirement is genuinely missing (for example payment provider, API base URL, database choice, auth mode, or required credentials), ask one concise clarification question and stop before inventing an integration; otherwise make sensible reversible defaults and proceed. If the user asks a question rather than requesting a code change, answer it directly and do not modify files. A browser-preview-mode build is complete only when the preview actually renders the generated app, not an instruction card. Default HTML projects must include index.html, styles.css and script.js; React preview projects must include src/App.jsx and src/styles.css. Framework projects must have a live preview server and verified preview URL. If the current preview runtime cannot execute that framework, state the exact limitation rather than showing a fake preview. For a very vague request ask one essential question before making irreversible/provider-specific choices; otherwise build a useful first version. Always finish with a short reply in the user's language; never end a turn with only files. Maintain requirements.md (create first, update when needs change) and memory.md (update after every build or edit). Apps must be responsive from 320px and keep appropriate client data in localStorage. For integrations, discover provider, official docs, API base URL, auth, schemas, sandbox and acceptance checks before implementation; ask for missing essentials rather than inventing them. Keep secrets server-side. Use the terminal and curl only with verified API contracts and safe sandbox/test operations; never trigger live charges or destructive actions without explicit authorization. DEPENDENCY RECOVERY IS REQUIRED: if npm install/ci fails, read the complete error, identify the exact conflicting/missing package and version, update package.json/lockfile safely, then retry installation. For ERESOLVE only, retry npm install --legacy-peer-deps; for ETARGET/404, replace the nonexistent version with a verified compatible release; for native postinstall failures, explain the constraint and use a browser-compatible alternative when possible. Never leave a failed install unexplained or proceed as if dependencies installed. After install succeeds, run the actual build and type-check; fix each error and rerun. The user may attach images or videos: study them and recreate the design. When a project needs a custom visual asset (hero artwork, illustration, product visual, background or logo), request a real raster image by emitting <generate_image aspect_ratio="16:9">a complete art-directed prompt</generate_image> in the main response; the server will generate it, add it to public/assets, and return the exact path for you to use. Use the generated asset in the actual page rather than leaving it unused. Never fake an image with a gradient or placeholder when a real asset was requested. A complete build also has package.json, metadata.json, README.md and a Makefile. Use only one terminal command per <run> tag; no shell chaining, pipes or redirection. Verify your files, follow the security skill, follow the edit-responsibility skill, fix every error the server reports.`;
 
 function buildFullSystemPrompt(isNvidia: boolean): string {
   const skillsDir = path.join(process.cwd(), 'skills');
@@ -207,7 +208,8 @@ function buildFullSystemPrompt(isNvidia: boolean): string {
     BASE_SYSTEM_PROMPT +
     '\n\nCRITICAL EXECUTION RULES:\n' +
     '1. Keep your thinking very concise (1-2 short paragraphs starting with a **Bold Heading** like **Designing App Layout**), then IMMEDIATELY write all files using <file path="...">...</file> tags in the main response (never inside thinking).\n' +
-    '2. Do not waste a <run> command on syntax-only checks because the server runs esbuild/JSON/HTML checks automatically. DO use <run> for dependency installation, real project build, type-check, tests, and verified sandbox API/CURL checks. Run one command per tag and wait for the output.\n\n' +
+    '2. Do not waste a <run> command on syntax-only checks because the server runs esbuild/JSON/HTML checks automatically. DO use <run> for dependency installation, real project build, type-check, tests, and verified sandbox API/CURL checks. Run one command per tag and wait for the output.\n' +
+    '3. If dependency installation fails, diagnose the exact npm error, correct the dependency versions or peer conflict, retry installation (use --legacy-peer-deps only for ERESOLVE), then run build/typecheck. Do not stop after the first install failure.\n\n' +
     '# LOADED SKILLS\n\n' +
     loadedSkills.join('\n\n');
 
@@ -230,6 +232,8 @@ const FALLBACK_NVIDIA_MODELS = [
   'google/diffusiongemma-26b-a4b-it',
   'meta/muse-glimmer-30b',
   'deepseek-ai/deepseek-v4.1-flash',
+  'nvidia/nemotron-3-ultra-550b-a55b',
+  'nvidia/nemotron-3-super-120b-a12b',
   'google/gemma-4-31b-it',
 ];
 
@@ -466,7 +470,9 @@ function runShellCommand(cmd: string, cwd: string): Promise<{ ok: boolean; outpu
     };
     child.stdout.on('data', append);
     child.stderr.on('data', append);
-    const timer = setTimeout(() => child.kill('SIGTERM'), 30000);
+    const installCommand = path.basename(parsed.bin) === 'npm' && ['install', 'ci'].includes(args[0]);
+    const commandTimeoutMs = installCommand ? 120000 : (path.basename(parsed.bin) === 'npm' && args[0] === 'run' ? 90000 : 30000);
+    const timer = setTimeout(() => child.kill('SIGTERM'), commandTimeoutMs);
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
@@ -475,9 +481,33 @@ function runShellCommand(cmd: string, cwd: string): Promise<{ ok: boolean; outpu
     });
     child.on('close', (code) => {
       if (settled) return;
-      settled = true;
       clearTimeout(timer);
-      const finalOutput = output.trim() || (code === 0 ? '(completed with no output)' : `Process exited with code ${code}`);
+      const firstOutput = output.trim() || (code === 0 ? '(completed with no output)' : `Process exited with code ${code}`);
+      const isInstall = path.basename(parsed.bin) === 'npm' && ['install', 'ci'].includes(args[0]);
+      // One bounded automatic peer-resolution retry. Other dependency errors are returned to the agent for diagnosis.
+      if (code !== 0 && isInstall && /ERESOLVE|unable to resolve dependency tree/i.test(firstOutput) && !args.includes('--legacy-peer-deps')) {
+        const retry = spawn('npm', ['install', '--legacy-peer-deps', '--ignore-scripts'], {
+          cwd, env: safeEnv, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let retryOutput = '';
+        const appendRetry = (chunk: Buffer) => { retryOutput += chunk.toString('utf8'); if (retryOutput.length > 10000) retryOutput = retryOutput.slice(-10000); };
+        retry.stdout.on('data', appendRetry);
+        retry.stderr.on('data', appendRetry);
+        const retryTimer = setTimeout(() => retry.kill('SIGTERM'), 120000);
+        retry.on('error', (err) => {
+          if (settled) return; settled = true; clearTimeout(retryTimer);
+          const combined = `${firstOutput}\n\nAutomatic ERESOLVE retry failed: ${err.message}`;
+          resolve({ ok: false, output: combined.slice(-8000) });
+        });
+        retry.on('close', (retryCode) => {
+          if (settled) return; settled = true; clearTimeout(retryTimer);
+          const combined = `${firstOutput}\n\n[AUTOMATIC RETRY: npm install --legacy-peer-deps]\n${retryOutput.trim() || `Process exited with code ${retryCode}`}`;
+          resolve({ ok: retryCode === 0, output: combined.slice(-8000) });
+        });
+        return;
+      }
+      settled = true;
+      const finalOutput = firstOutput;
       resolve({ ok: code === 0, output: finalOutput.length > 8000 ? finalOutput.slice(0, 8000) + '\n...[output truncated]' : finalOutput });
     });
   });
@@ -1616,6 +1646,7 @@ async function runAgentJob(
   job: Job,
   params: {
     model: string;
+    plannerModel?: string;
     messages: { role: string; text: string; attachments?: AttachmentInput[] }[];
     attachments?: AttachmentInput[];
   }
@@ -1653,7 +1684,7 @@ async function runAgentJob(
     return;
   }
 
-  const plan = await createGeminiPlan(String(rawMessages[rawMessages.length - 1]?.text || ''), 'build');
+  const plan = await createGeminiPlan(String(rawMessages[rawMessages.length - 1]?.text || ''), 'build', params.plannerModel || PLANNER_MODEL);
   if (plan) emitJobEvent(job, { type: 'plan', plan });
   if (plan?.instructions && conversation.length) {
     const last = conversation[conversation.length - 1];
@@ -2040,7 +2071,7 @@ if (generatedBuildAssets.length > 0 && turn < MAX_TURNS - 1) {
 
 app.post('/api/agent', (req, res) => {
   try {
-    const { model, messages, files, attachments } = req.body || {};
+    const { model, plannerModel, messages, files, attachments } = req.body || {};
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aib-job-'));
 
@@ -2069,6 +2100,7 @@ app.post('/api/agent', (req, res) => {
 
     runAgentJob(job, {
       model: String(model || 'gemini-3.8-flash'),
+      plannerModel: String(plannerModel || PLANNER_MODEL),
       messages: Array.isArray(messages) ? messages : [],
       attachments: Array.isArray(attachments) ? attachments : undefined,
     });
@@ -2153,6 +2185,8 @@ function loadChatSkillsPrompt(): string {
   } catch { /* skills.md remains a safe fallback */ }
   return `You are a highly capable multimodal Gemini AI Assistant in Chat Mode. Use the user's language. Do not reveal hidden chain-of-thought; provide concise user-visible plans and explanations.
 
+CHAT MODE RESPONSE RULES: For general questions, answer directly and naturally without unnecessary preambles. For coding requests, default to one complete, self-contained HTML + CSS + JavaScript document in a single html code block, with a polished modern design and WHITE background/light theme unless the user specifies otherwise. Include all CSS and JS in that document, no missing files, no TODOs, no placeholder handlers, no external package dependency unless truly required. Before responding, mentally validate every selector, event listener, variable, closing tag, async flow, and localStorage access. Use safe DOM checks, input validation, try/catch around storage and async operations, and show user-friendly error states. Ensure the code is runnable in the app's sandbox preview. For a multi-screen or backend-heavy app (earning/rewards app, auth, payments, database, admin panel, API integration), tell the user briefly that Build Mode is recommended for a complete project, BUT still provide a working front-end prototype in Chat Mode when they asked for code. Never claim a front-end demo includes real payments, server auth or backend persistence. If the user uploads an image and asks for an edit, preserve the attached image as the source and change only what they requested; do not create a replacement scene or duplicate existing subjects. If the user asks for image analysis rather than editing, analyze it and do not generate a new image.
+
 Follow skills.md and every installed skill below:
 
 ${skillsContent}
@@ -2160,13 +2194,14 @@ ${skillsContent}
 # INSTALLED SKILLS\n\n${folderSkills.join('\n\n')}`;
 }
 
-function normalizeGeminiChatModel(rawModel?: string): string {
+function normalizeChatModel(rawModel?: string): string {
   const m = String(rawModel || 'gemini-3.8-flash').trim();
-  // Chat Mode exclusively uses Google Gemini models
-  if (!m || m.startsWith('nvidia:') || m.includes('/')) {
-    return 'gemini-3.8-flash';
+  if (m.startsWith('nvidia:')) {
+    const id = m.slice(7);
+    return id && !EXCLUDED_MODEL_REGEX.test(id) ? `nvidia:${id}` : 'gemini-3.8-flash';
   }
-  return m;
+  if (m.includes('/') || /^gemini-[a-z0-9.-]+$/i.test(m)) return m;
+  return 'gemini-3.8-flash';
 }
 
 function detectAspectRatioFromPrompt(prompt: string, fallback = '1:1'): string {
@@ -2829,7 +2864,8 @@ async function generateNvidiaFreeImage(
 let geminiImgCooldownUntil = 0;
 async function generateGeminiNativeImage(
   prompt: string,
-  aspectRatio: string
+  aspectRatio: string,
+  attachments: AttachmentInput[] = []
 ): Promise<{ url: string; model: string; aspectRatio: string }> {
   const ai = getGenAIClient();
   if (Date.now() < geminiImgCooldownUntil) throw new Error('Gemini image quota/limit chal raha hai, kuch der baad dobara try hoga');
@@ -2839,9 +2875,13 @@ async function generateGeminiNativeImage(
   for (const model of candidates) {
     for (const withSize of [true, false]) {
       try {
+        const imageParts = (attachments || []).filter((a: any) => a && a.data && String(a.mimeType || '').startsWith('image/')).map((a: any) => ({ inlineData: { mimeType: a.mimeType, data: stripDataUrlPrefix(a.data) } }));
+        const contents: any = imageParts.length
+          ? [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }]
+          : prompt;
         const r: any = await ai.models.generateContent({
           model,
-          contents: prompt,
+          contents,
           config: { responseModalities: ['IMAGE'], imageConfig: withSize ? { aspectRatio, imageSize: size } : { aspectRatio } } as any,
         });
         for (const part of r?.candidates?.[0]?.content?.parts || []) {
@@ -2875,8 +2915,12 @@ async function generateGeminiImage(
   const sel = String(imageModel || 'gemini');
   const stages: { label: string; run: () => Promise<any> }[] = [];
   const nv = (label: string, ids?: string[]) => stages.push({ label, run: () => generateNvidiaFreeImage(prompt, validRatio, ids, tried) });
-  const gem = () => stages.push({ label: 'Gemini', run: () => generateGeminiNativeImage(prompt, validRatio) });
-  if (sel === 'flux') { nv('Flux Klein', KLEIN); nv('NVIDIA auto'); gem(); }
+  const imageReferences = ( _attachments || []).filter((a: any) => a && a.data && String(a.mimeType || '').startsWith('image/'));
+  const gem = () => stages.push({ label: 'Gemini', run: () => generateGeminiNativeImage(prompt, validRatio, imageReferences) });
+  // Image edits must use the supplied original image as conditioning input. Do not fall back to a text-only image model, which would create a different scene.
+  if (imageReferences.length > 0) {
+    stages.push({ label: 'Gemini reference-image edit', run: () => generateGeminiNativeImage(prompt, validRatio, imageReferences) });
+  } else if (sel === 'flux') { nv('Flux Klein', KLEIN); nv('NVIDIA auto'); gem(); }
   else if (sel === 'nvidia') { nv('NVIDIA auto'); gem(); }
   else if (sel.startsWith('nv:')) { nv(sel.slice(3), [sel.slice(3)]); nv('NVIDIA auto'); gem(); }
   else { gem(); nv('NVIDIA auto'); }
@@ -2952,7 +2996,7 @@ app.post('/api/chat/stream', async (req, res) => {
   }, 5000);
 
   try {
-    const { model, messages, attachments, aspectRatio, forceImage, imageModel } = req.body || {};
+    const { model, plannerModel, messages, attachments, aspectRatio, forceImage, imageModel } = req.body || {};
     const apiKey = getGeminiApiKey();
     if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'MISSING_KEY') {
       throw new Error(
@@ -2960,11 +3004,12 @@ app.post('/api/chat/stream', async (req, res) => {
       );
     }
 
-    const requestedModel = normalizeGeminiChatModel(model);
+    const requestedModel = normalizeChatModel(model);
     const rawMessages = Array.isArray(messages) ? messages : [];
     const lastMsg = rawMessages[rawMessages.length - 1];
     const lastUserText = String(lastMsg?.text || '').trim();
-    const plan = await createGeminiPlan(lastUserText, 'chat');
+    const selectedPlanner = String(plannerModel || PLANNER_MODEL).startsWith('nvidia:') ? PLANNER_MODEL : String(plannerModel || PLANNER_MODEL);
+    const plan = await createGeminiPlan(lastUserText, 'chat', selectedPlanner);
     const systemInstruction = `${loadChatSkillsPrompt()}\n\nGemini planner brief: ${plan?.instructions || 'Use your own judgment.'}\nQuality checklist: ${(plan?.qualityChecklist || []).join('; ')}`;
     if (plan) sendEvent({ type: 'plan', plan });
     const lastAtts: AttachmentInput[] =
@@ -2988,12 +3033,15 @@ app.post('/api/chat/stream', async (req, res) => {
       });
     }
 
-    const directImage =
-      Boolean(forceImage) || isDirectImageGenerationRequest(lastUserText, lastAtts.length > 0);
+    const hasReferenceImage = lastAtts.some((a: any) => a && a.data && String(a.mimeType || '').startsWith('image/'));
+    const isReferenceImageEdit = hasReferenceImage && /\b(edit|modify|change|add|remove|replace|move|put|insert|retouch|background|beside|next to|alongside|side me|side mein|paas me|paas mein|iske bagal|bagal me|bagal mein|saath me|saath mein|iske sath|jod do|rakh do|lagao|hata do|badal do|add kar|girl add|boy add)\b/i.test(lastUserText);
+    const directImage = isReferenceImageEdit || Boolean(forceImage) || isDirectImageGenerationRequest(lastUserText, lastAtts.length > 0);
 
-    // Fast path for direct image generation requests
+    // Fast path for image generation and source-preserving image edits.
     if (directImage && lastUserText) {
-      let promptToGenerate = plan?.image?.prompt || plan?.instructions || lastUserText;
+      let promptToGenerate = isReferenceImageEdit
+        ? `IMAGE EDIT — USE THE ATTACHED IMAGE AS THE SOURCE IMAGE, NOT AS INSPIRATION. Apply only this requested change: ${lastUserText}. Preserve the original photo, original person/people, identity, face, expression, pose, clothing, camera angle, lighting, background, framing and all existing objects unless the user explicitly asks to change them. Do not recreate the whole scene. Do not duplicate any existing person or object. Respect requested counts exactly (for example, “add one girl” means add exactly ONE new girl, while keeping the original subject unchanged). Add the new element naturally beside the existing subject with matching perspective, scale, shadows and lighting. Return one edited image.`
+        : (plan?.image?.prompt || plan?.instructions || lastUserText);
       if (/ui design image/i.test(lastUserText) && rawMessages.length >= 2) {
         const prevUser = [...rawMessages.slice(0, -1)].reverse().find((m: any) => m.role === 'user');
         if (prevUser?.text) {
@@ -3003,7 +3051,7 @@ app.post('/api/chat/stream', async (req, res) => {
       const ratio = detectAspectRatioFromPrompt(promptToGenerate, aspectRatio || '1:1');
       sendEvent({
         type: 'thought',
-        text: `**Generating image**\n\nUsing ${String(imageModel || 'gemini') === 'gemini' ? 'Gemini image model' : 'NVIDIA free image models'} for "${promptToGenerate}".`,
+        text: `**Generating image**\n\nUsing ${isReferenceImageEdit ? 'Gemini reference-image editing' : (String(imageModel || 'gemini') === 'gemini' ? 'Gemini image model' : 'NVIDIA free image models')} for "${promptToGenerate}".`,
         heading: 'Generating Image',
       });
       sendEvent({
@@ -3024,117 +3072,58 @@ app.post('/api/chat/stream', async (req, res) => {
       return;
     }
 
-    const contents = rawMessages.map((m: any, idx: number) => {
-      const role: 'user' | 'model' =
-        m.role === 'ai' || m.role === 'assistant' || m.role === 'model' ? 'model' : 'user';
-      const parts: any[] = [];
-      const msgAtts: AttachmentInput[] =
-        idx === rawMessages.length - 1 && lastAtts.length > 0
-          ? lastAtts
-          : Array.isArray(m.attachments)
-          ? m.attachments
-          : [];
-      for (const att of msgAtts) {
-        if (att && att.data && att.mimeType) {
-          parts.push({
-            inlineData: {
-              mimeType: att.mimeType,
-              data: stripDataUrlPrefix(att.data),
-            },
-          });
-        }
-      }
-      parts.push({ text: String(m.text || ' ') });
-      return { role, parts };
-    });
-
-    // Prioritize ultra-fast active Gemini Flash models first so responses start in ~1.2s
-    const candidateModels = Array.from(
-      new Set([
-        'gemini-3.5-flash-lite',
-        'gemini-flash-lite-latest',
-        requestedModel,
-        'gemini-3-flash-preview',
-        'gemini-3.6-flash',
-        'gemini-3.5-flash',
-        'gemini-3.8-flash',
-      ])
-    );
-
-    const buildThinkingConfig = (_modelName: string, useFallbackConfig: boolean) => {
-      if (useFallbackConfig) {
-        return { includeThoughts: true };
-      }
-      return {
-        includeThoughts: true,
-        thinkingLevel: 'HIGH',
-      };
-    };
-
+    const chatConversation = rawMessages.map((m: any, idx: number) => ({
+      role: (m.role === 'ai' || m.role === 'assistant' || m.role === 'model') ? 'model' as const : 'user' as const,
+      text: String(m.text || ' '),
+      attachments: (idx === rawMessages.length - 1 && lastAtts.length > 0) ? lastAtts : (Array.isArray(m.attachments) ? m.attachments : []),
+    }));
     let fullText = '';
     let fullThought = '';
     let currentHeading = 'Thinking...';
-    let streamSucceeded = false;
-    let lastStreamErr: any = null;
-
-    for (let i = 0; i < candidateModels.length; i++) {
-      if (aborted) break;
-      const targetModel = candidateModels[i];
-      const firstByteTimeoutMs =
-        targetModel === 'gemini-3.5-flash-lite' ||
-        targetModel === 'gemini-flash-lite-latest' ||
-        targetModel === 'gemini-3-flash-preview'
-          ? 10000
-          : 2000;
-
-      for (const fallbackCfg of [false, true]) {
-        if (aborted) break;
-        try {
-          const thinkingConfig = buildThinkingConfig(targetModel, fallbackCfg);
-          await geminiStreamIPv4({
-            model: targetModel,
-            apiKey,
-            systemInstruction,
-            contents,
-            thinkingConfig,
-            firstByteTimeoutMs,
-            isAborted: () => aborted,
-            onThought: (delta) => {
-              fullThought += delta;
-              const extracted = extractHeadingFromThoughts(fullThought);
-              if (extracted) currentHeading = extracted;
-              sendEvent({
-                type: 'thought',
-                text: delta,
-                heading: currentHeading,
-              });
-            },
-            onText: (delta) => {
-              fullText += delta;
-              sendEvent({
-                type: 'text',
-                text: delta,
-              });
-            },
-          });
-
-          streamSucceeded = true;
-          break;
-        } catch (err: any) {
-          lastStreamErr = err;
-          const errMsg = String(err?.message || err || '');
-          if (!fallbackCfg && (errMsg.includes('HTTP_400') || /thinking/i.test(errMsg))) {
-            continue;
-          }
-          break;
+    const onThought = (delta: string) => {
+      fullThought += delta;
+      const extracted = extractHeadingFromThoughts(fullThought);
+      if (extracted) currentHeading = extracted;
+      sendEvent({ type: 'thought', text: delta, heading: currentHeading });
+    };
+    const onText = (delta: string) => {
+      fullText += delta;
+      sendEvent({ type: 'text', text: delta });
+    };
+    if (requestedModel.startsWith('nvidia:')) {
+      if (!getNvidiaApiKey()) throw new Error('NVIDIA_API_KEY is missing. Add it to the server environment to use NVIDIA models.');
+      await streamSingleNvidiaModel(requestedModel.slice(7), getNvidiaApiKey(), systemInstruction, chatConversation, onThought, onText, 15000);
+    } else {
+      const contents = chatConversation.map((m) => {
+        const parts: any[] = [];
+        for (const att of m.attachments || []) {
+          if (att?.data && att?.mimeType) parts.push({ inlineData: { mimeType: att.mimeType, data: stripDataUrlPrefix(att.data) } });
         }
+        parts.push({ text: m.text || ' ' });
+        return { role: m.role, parts };
+      });
+      const candidateModels = Array.from(new Set([requestedModel, 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3-flash-preview', 'gemini-3.5-flash', 'gemini-3.8-flash']));
+      let streamSucceeded = false;
+      let lastStreamErr: any = null;
+      for (const targetModel of candidateModels) {
+        if (aborted) break;
+        for (const fallbackCfg of [false, true]) {
+          try {
+            await geminiStreamIPv4({ model: targetModel, apiKey, systemInstruction, contents,
+              thinkingConfig: fallbackCfg ? { includeThoughts: true } : { includeThoughts: true, thinkingLevel: 'HIGH' },
+              firstByteTimeoutMs: 10000, isAborted: () => aborted, onThought, onText });
+            streamSucceeded = true;
+            break;
+          } catch (err: any) {
+            lastStreamErr = err;
+            const msg = String(err?.message || err || '');
+            if (!fallbackCfg && (msg.includes('HTTP_400') || /thinking/i.test(msg))) continue;
+            break;
+          }
+        }
+        if (streamSucceeded) break;
       }
-
-      if (streamSucceeded) break;
-    }
-
-    if (!streamSucceeded) {
-      throw lastStreamErr || new Error('Gemini stream failed.');
+      if (!streamSucceeded) throw lastStreamErr || new Error('Gemini stream failed.');
     }
 
     // Check if Gemini emitted <project_name>...</project_name>
@@ -3209,6 +3198,109 @@ app.post('/api/chat/stream', async (req, res) => {
     }
   }
 });
+
+// Live Vite preview sessions. The generated app runs in an isolated temporary
+// workspace; only its HTTP output is exposed through the same-origin /preview URL.
+const livePreviews = new Map<string, { dir: string; child: ReturnType<typeof spawn>; port: number; output: string; projectKey: string; createdAt: number }>();
+const previewPorts = new Set<number>();
+
+function reservePreviewPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      probe.close(() => { if (!port) reject(new Error('Could not reserve preview port')); else resolve(port); });
+    });
+    probe.on('error', reject);
+  });
+}
+
+app.post('/api/preview/start', async (req, res) => {
+  let previewDir = '';
+  try {
+    const files = req.body?.files;
+    const projectKey = String(req.body?.projectId || 'default').slice(0, 120);
+    for (const [oldId, old] of livePreviews.entries()) {
+      if (old.projectKey === projectKey) { old.child.kill('SIGTERM'); livePreviews.delete(oldId); fs.rmSync(old.dir, { recursive: true, force: true }); }
+    }
+    if (!files || typeof files !== 'object' || Array.isArray(files)) return res.status(400).json({ error: 'Project files are required.' });
+    const safeFiles: Record<string, string> = {};
+    for (const [rawPath, value] of Object.entries(files)) {
+      if (typeof value !== 'string' || rawPath.includes('..') || rawPath.startsWith('/') || rawPath.includes('node_modules')) continue;
+      safeFiles[rawPath.replace(/\\/g, '/')] = value;
+    }
+    const pkg = safeFiles['package.json'] ? JSON.parse(safeFiles['package.json']) : null;
+    const deps = { ...(pkg?.dependencies || {}), ...(pkg?.devDependencies || {}) };
+    const isVite = Boolean(deps.vite) || Object.keys(safeFiles).some(k => /(^|\/)vite\.config\.[cm]?[jt]s$/.test(k));
+    if (!isVite) return res.status(400).json({ error: 'This preview endpoint is for Vite projects. Plain HTML/JS projects use the instant browser preview.' });
+    if (!safeFiles['index.html']) return res.status(400).json({ error: 'Vite project is missing root index.html.' });
+    previewDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aib-preview-'));
+    for (const [rel, content] of Object.entries(safeFiles)) writeTempFile(previewDir, rel, content);
+    const id = `pv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const port = await reservePreviewPort();
+    const safeInstallEnv: Record<string, string> = { CI: 'true', PATH: process.env.PATH || '', HOME: process.env.HOME || '', TMPDIR: process.env.TMPDIR || '/tmp', npm_config_fund: 'false', npm_config_audit: 'false' };
+    const install = spawn('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: previewDir, env: safeInstallEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let installOutput = '';
+    install.stdout.on('data', b => { installOutput = (installOutput + b.toString()).slice(-6000); });
+    install.stderr.on('data', b => { installOutput = (installOutput + b.toString()).slice(-6000); });
+    let installResult = await new Promise<{ ok: boolean; code: number | null }>((resolve, reject) => {
+      const timer = setTimeout(() => { install.kill('SIGTERM'); reject(new Error('Dependency installation timed out after 120 seconds. ' + installOutput)); }, 120000);
+      install.on('error', err => { clearTimeout(timer); reject(err); });
+      install.on('close', code => { clearTimeout(timer); resolve({ ok: code === 0, code }); });
+    });
+    if (!installResult.ok && /ERESOLVE|unable to resolve dependency tree/i.test(installOutput)) {
+      installOutput += '\n[Retrying npm install --legacy-peer-deps]\n';
+      const retry = spawn('npm', ['install', '--legacy-peer-deps', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: previewDir, env: safeInstallEnv, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      retry.stdout.on('data', b => { installOutput = (installOutput + b.toString()).slice(-8000); });
+      retry.stderr.on('data', b => { installOutput = (installOutput + b.toString()).slice(-8000); });
+      installResult = await new Promise<{ ok: boolean; code: number | null }>((resolve, reject) => { const timer = setTimeout(() => { retry.kill('SIGTERM'); reject(new Error('Dependency retry timed out. ' + installOutput)); }, 120000); retry.on('error', err => { clearTimeout(timer); reject(err); }); retry.on('close', code => { clearTimeout(timer); resolve({ ok: code === 0, code }); }); });
+    }
+    if (!installResult.ok) throw new Error(`Dependency installation failed (exit ${installResult.code}). ${installOutput}`);
+    const viteBin = path.join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js');
+    if (!fs.existsSync(viteBin)) throw new Error('Vite dependency was not installed in this project. Check package.json.');
+    const child = spawn(process.execPath, [viteBin, '--host', '127.0.0.1', '--port', String(port), '--strictPort', '--base', `/preview/${id}/`], { cwd: previewDir, env: { ...process.env, CI: 'true' }, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', b => { output = (output + b.toString()).slice(-6000); });
+    child.stderr.on('data', b => { output = (output + b.toString()).slice(-6000); });
+    livePreviews.set(id, { dir: previewDir, child, port, output, projectKey, createdAt: Date.now() });
+    child.on('exit', () => { const current = livePreviews.get(id); if (current) current.output = (current.output + '\nVite preview process exited.').slice(-6000); });
+    let ready = false;
+    for (let i = 0; i < 40; i++) {
+      if (child.exitCode !== null) break;
+      try { const r = await fetch(`http://127.0.0.1:${port}/preview/${id}/`); if (r.ok) { ready = true; break; } } catch {}
+      await new Promise(r => setTimeout(r, 500));
+    }
+    if (!ready) { child.kill('SIGTERM'); livePreviews.delete(id); throw new Error(`Vite server did not become ready. ${output}`); }
+    res.json({ ok: true, previewUrl: `/preview/${id}/`, previewId: id, installOutput: installOutput.slice(-2500) });
+  } catch (err: any) {
+    if (previewDir) fs.rmSync(previewDir, { recursive: true, force: true });
+    res.status(500).json({ error: String(err?.message || err || 'Preview startup failed') });
+  }
+});
+
+// Same-origin reverse proxy for live Vite sessions (including JS/CSS/module requests).
+app.use('/preview/:id', (req, res, next) => {
+  const session = livePreviews.get(req.params.id);
+  if (!session || session.child.exitCode !== null) return res.status(503).send('Preview server is not running. Restart Preview from the app.');
+  const upstream = http.request({ hostname: '127.0.0.1', port: session.port, method: req.method, path: `/preview/${req.params.id}${req.url === '/' ? '/' : req.url}`, headers: { ...req.headers, host: `127.0.0.1:${session.port}` } }, upstreamRes => {
+    res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+    upstreamRes.pipe(res);
+  });
+  upstream.on('error', err => { if (!res.headersSent) res.status(502).send(`Preview proxy error: ${err.message}`); });
+  req.pipe(upstream);
+});
+
+setInterval(() => {
+  const cutoff = Date.now() - 45 * 60 * 1000;
+  for (const [id, session] of livePreviews.entries()) {
+    if (session.createdAt < cutoff || session.child.exitCode !== null) {
+      session.child.kill('SIGTERM');
+      livePreviews.delete(id);
+      fs.rmSync(session.dir, { recursive: true, force: true });
+    }
+  }
+}, 5 * 60 * 1000);
 
 const publicDir = path.join(process.cwd(), 'public');
 app.use(express.static(publicDir));

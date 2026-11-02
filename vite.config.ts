@@ -5,6 +5,9 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // The app shell is a self-contained React/Babel page mirrored at root index.html.
+    // Prevent Vite from copying public/index.html over the build entry.
+    publicDir: false,
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
