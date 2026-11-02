@@ -782,6 +782,11 @@
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       }
 
+      .model-selector-row { width:100%; min-width:0; min-height:38px; display:flex; align-items:center; justify-content:space-between; gap:10px; text-align:left; padding:6px 12px; }
+      .model-selector-row strong, .cm-model-selector-row strong { max-width:72%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+      .cm-model-selector-stack { max-width: min(58vw, 360px); }
+      .cm-model-selector-row { min-height:30px; padding:3px 9px; font-size:11px; }
+      @media (max-width: 600px) { .cm-header { gap:7px !important; } .cm-model-selector-stack { max-width:none; } .model-selector-stack { width:100% !important; } }
       .cm-header {
         height: 60px;
         background: #000000;
@@ -3125,9 +3130,9 @@ ${combinedCss}
                       )}
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <button type="button" className="btn" onClick={() => { setModelSelectionTarget('run'); setModelSheetOpen(true); }}>✦ Run: {currentModelShort} ⌄</button>
-                          <button type="button" className="btn" onClick={() => { setModelSelectionTarget('planner'); setModelSheetOpen(true); }}>Planner: {String(plannerModel).startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : plannerModel.replace('gemini-', 'Gemini ')} ⌄</button>
+                        <div className="model-selector-stack" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, width: '100%', minWidth: 0 }}>
+                          <button type="button" className="btn model-selector-row" onClick={() => { setModelSelectionTarget('planner'); setModelSheetOpen(true); }}><span>Planner</span><strong>{String(plannerModel).startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : plannerModel.replace('gemini-', 'Gemini ')} ⌄</strong></button>
+                          <button type="button" className="btn model-selector-row" onClick={() => { setModelSelectionTarget('run'); setModelSheetOpen(true); }}><span>Runner</span><strong>✦ {currentModelShort} ⌄</strong></button>
                           <button
                             type="button"
                             className="btn btn-icon"
@@ -3402,9 +3407,9 @@ ${combinedCss}
                           )}
 
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <button type="button" className="btn" style={{ padding: '0 10px', fontSize: 12.5 }} onClick={() => { setModelSelectionTarget('run'); setModelSheetOpen(true); }}>✦ Run: {currentModelShort} ⌄</button>
-                              <button type="button" className="btn" style={{ padding: '0 10px', fontSize: 12.5 }} onClick={() => { setModelSelectionTarget('planner'); setModelSheetOpen(true); }}>Planner ⌄</button>
+                            <div className="model-selector-stack" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, width: '100%', minWidth: 0 }}>
+                              <button type="button" className="btn model-selector-row" onClick={() => { setModelSelectionTarget('planner'); setModelSheetOpen(true); }}><span>Planner</span><strong>{String(plannerModel).startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : plannerModel.replace('gemini-', 'Gemini ')} ⌄</strong></button>
+                              <button type="button" className="btn model-selector-row" onClick={() => { setModelSelectionTarget('run'); setModelSheetOpen(true); }}><span>Runner</span><strong>✦ {currentModelShort} ⌄</strong></button>
                               <button
                                 type="button"
                                 className="btn btn-icon"
@@ -5172,9 +5177,9 @@ ${codeText}`;
                 </svg>
               </button>
 
-              <div style={{display:'flex',gap:6,alignItems:'center',minWidth:0,overflowX:'auto'}}>
-                <button type="button" className="cm-btn" style={{whiteSpace:'nowrap'}} onClick={()=>{setChatModelTarget('planner');setChatModelSheetOpen(true);}}>Planner · {String(plannerModel || 'gemini-3.8-flash').startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : String(plannerModel || 'gemini-3.8-flash').replace('gemini-','Gemini ')} ⌄</button>
-                <button type="button" className="cm-btn" style={{whiteSpace:'nowrap'}} onClick={()=>{setChatModelTarget('run');setChatModelSheetOpen(true);}}>Run · {String(chatRunModel).startsWith('nvidia:') ? String(chatRunModel).slice(7).split('/').pop() : String(chatRunModel).replace('gemini-','Gemini ')} ⌄</button>
+              <div className="cm-model-selector-stack" style={{display:'flex',flexDirection:'column',gap:5,alignItems:'stretch',minWidth:0,flex:'1 1 auto'}}>
+                <button type="button" className="cm-btn cm-model-selector-row" style={{whiteSpace:'nowrap',width:'100%',display:'flex',justifyContent:'space-between',gap:8}} onClick={()=>{setChatModelTarget('planner');setChatModelSheetOpen(true);}}><span>Planner</span><strong>{String(plannerModel || 'gemini-3.8-flash').startsWith('nvidia:') ? splitModelDisplay(plannerModel).shortName : String(plannerModel || 'gemini-3.8-flash').replace('gemini-','Gemini ')} ⌄</strong></button>
+                <button type="button" className="cm-btn cm-model-selector-row" style={{whiteSpace:'nowrap',width:'100%',display:'flex',justifyContent:'space-between',gap:8}} onClick={()=>{setChatModelTarget('run');setChatModelSheetOpen(true);}}><span>Runner</span><strong>{String(chatRunModel).startsWith('nvidia:') ? String(chatRunModel).slice(7).split('/').pop() : String(chatRunModel).replace('gemini-','Gemini ')} ⌄</strong></button>
               </div>
               <button
                 type="button"
