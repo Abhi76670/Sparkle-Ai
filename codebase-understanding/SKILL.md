@@ -1,0 +1,2 @@
+# Codebase Understanding
+Before edits, inspect the project tree, package scripts, framework, routes, imports, components, styles, data flow, existing integrations and conventions. Read relevant files and search references before changing them. Preserve the current theme, layout, features, naming, package identity and working behavior. Never replace the whole project when a targeted change is sufficient.

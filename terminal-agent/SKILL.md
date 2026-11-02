@@ -1,0 +1,2 @@
+# Terminal Agent
+Use the project workspace terminal for relevant dependency, build, type-check, test and documented sandbox API commands. Run one command at a time; no shell chaining, pipes, redirection, sudo, destructive commands or credential printing. Inspect command output and feed exact failures back to the same executor for bounded fixes. Treat the workspace as a restricted temporary workspace, not as a fully isolated operating-system container. Never claim a command ran unless its output was received.

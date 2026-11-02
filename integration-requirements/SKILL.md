@@ -1,0 +1,2 @@
+# Integration Requirements Discovery
+For payment, database, authentication, storage, email, maps or third-party APIs, identify provider, official documentation/version, API base URL, auth method, required scopes, request/response schemas, webhook signature, idempotency, rate limits, sandbox and acceptance tests. Ask for the API base URL and provider when missing. Ask users to configure secrets server-side as environment variables; never request secret values in chat. Do not invent endpoints.

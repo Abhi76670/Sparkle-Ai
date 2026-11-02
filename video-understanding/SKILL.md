@@ -1,0 +1,2 @@
+# Video Understanding
+When a video reference is attached, use the Gemini-generated video analysis brief. Extract the sequence of screens, navigation, visible text, layout regions, typography, color, spacing, controls, animations, transitions and interactions. Separate observed facts from inference. Do not claim to have analyzed a video if processing failed; request a shorter/compressed clip or key screenshots. Translate observations into an implementation checklist.

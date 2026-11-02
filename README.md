@@ -44,3 +44,7 @@ The agent answers direct questions without changing files. It asks a focused cla
 Terminal commands run in a temporary per-job workspace using a restricted command allowlist and `shell: false`; shell chaining, pipes, redirection and destructive commands are blocked. `npm install` uses `--ignore-scripts`. This is a restricted workspace, **not a full OS/container isolation boundary**. Do not run untrusted projects on a machine containing sensitive files or credentials. API secrets are not passed through the terminal environment; explicitly named server-side environment variables may be expanded into a CURL command without displaying their values in the command text.
 
 The server checks generated JavaScript/JSX with esbuild. A syntax pass is not proof that the app works. Build/type-check/test commands and real browser viewport testing must be run separately before claiming those checks passed. Responsive design guidance covers mobile, tablet and desktop; actual visual testing depends on the available preview/browser tooling.
+
+## Chat Mode response quality
+
+Chat Mode now loads a dedicated `chat-response-quality` skill alongside the existing skill library. It improves intent recognition, language matching, response structure, accuracy checks, clarification behavior, conversation continuity and honest reporting. It selects concise or detailed output based on the request instead of forcing every answer into the same template.
